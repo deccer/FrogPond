@@ -33,6 +33,7 @@ struct SWindowSettings {
     int32_t ResolutionHeight;
     float ResolutionScale;
     EWindowStyle WindowStyle;
+    bool IsDebug;
 };
 
 GLFWwindow* g_window = nullptr;
@@ -87,7 +88,7 @@ auto CreateProgram(
 
     const auto shaderSourcePtr = shaderSource.data();
     auto program = glCreateShaderProgramv(shaderType, 1, &shaderSourcePtr);
-    ObjectLabel(shaderType, program, label);
+    ObjectLabel(program, GL_PROGRAM, label);
     glProgramParameteri(program, GL_PROGRAM_SEPARABLE, GL_TRUE);
 
     std::string errorLog;
@@ -117,7 +118,7 @@ auto CreateProgramPipeline(
 
     uint32_t pipeline = 0;
     glCreateProgramPipelines(1, &pipeline);
-    ObjectLabel(GL_PROGRAM_PIPELINE, pipeline, label);
+    ObjectLabel(pipeline, GL_PROGRAM_PIPELINE, label);
     glUseProgramStages(pipeline, GL_VERTEX_SHADER_BIT, *vertexShaderResult);
     glUseProgramStages(pipeline, GL_FRAGMENT_SHADER_BIT, *fragmentShaderResult);
 
@@ -163,13 +164,29 @@ auto OnWindowFramebufferSizeChanged(
     g_framebufferHeight = height;
 }
 
+auto OnOpenGLDebugMessage(
+    uint32_t source,
+    uint32_t type,
+    uint32_t id,
+    uint32_t severity, 
+    int32_t length,
+    const char* message,
+    const void* userParam) -> void {
+
+    if (type == GL_DEBUG_TYPE_ERROR) {
+        spdlog::error(message);
+        __asm__ volatile("int $0x03");
+    }
+}
+
 auto main() -> int32_t
 {
     constexpr SWindowSettings windowSettings = {
         .ResolutionWidth = 1680,
         .ResolutionHeight = 1050,
         .ResolutionScale = 1.0f,
-        .WindowStyle = EWindowStyle::Windowed
+        .WindowStyle = EWindowStyle::Windowed,
+        .IsDebug = true
     };
 
     if (glfwInit() == GLFW_FALSE) {
@@ -231,6 +248,12 @@ auto main() -> int32_t
         return -4;
     }
 
+    if (windowSettings.IsDebug) {
+        glDebugMessageCallback(OnOpenGLDebugMessage, nullptr);
+        glEnable(GL_DEBUG_OUTPUT);
+        glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
+    }
+
     auto g_imguiContext = ImGui::CreateContext();
     auto& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_IsSRGB;
@@ -256,7 +279,7 @@ auto main() -> int32_t
 
     uint32_t defaultInputLayout = 0;
     glCreateVertexArrays(1, &defaultInputLayout);
-    ObjectLabel(GL_VERTEX_ARRAY, defaultInputLayout, "InputLayout");
+    ObjectLabel(defaultInputLayout, GL_VERTEX_ARRAY, "InputLayout");
     glBindVertexArray(defaultInputLayout);
 
     glVertexArrayAttribFormat(defaultInputLayout, 0, 3, GL_FLOAT, false, offsetof(SVertexPositionColor, Position));
@@ -276,12 +299,12 @@ auto main() -> int32_t
 
     uint32_t vertexBuffer = 0;
     glCreateBuffers(1, &vertexBuffer);
-    ObjectLabel(GL_ARRAY_BUFFER, vertexBuffer, "VertexBuffer");
+    ObjectLabel(vertexBuffer, GL_BUFFER, "VertexBuffer");
     glNamedBufferData(vertexBuffer, vertices.size() * sizeof(SVertexPositionColor), vertices.data(), GL_STATIC_DRAW);
 
     uint32_t indexBuffer = 0;
     glCreateBuffers(1, &indexBuffer);
-    ObjectLabel(GL_ELEMENT_ARRAY_BUFFER, indexBuffer, "IndexBuffer");
+    ObjectLabel(indexBuffer, GL_BUFFER, "IndexBuffer");
     glNamedBufferData(indexBuffer, indices.size() * sizeof(uint32_t), indices.data(), GL_STATIC_DRAW);
 
     auto simpleProgramResult = CreateProgramPipeline(
