@@ -46,6 +46,11 @@ struct SVertexPositionColor {
     glm::vec4 Color;
 };
 
+struct SCameraInformation {
+    glm::mat4x4 ProjectionMatrix;
+    glm::mat4x4 ViewMatrix;
+};
+
 static auto ReadTextFromFile(const std::string_view filePath) -> std::string {
 
     std::ifstream file(filePath.data(), std::ios::ate);
@@ -165,7 +170,7 @@ auto OnOpenGLDebugMessage(
 
     if (type == GL_DEBUG_TYPE_ERROR) {
         spdlog::error(message);
-        __asm__ volatile("int $0x03");
+        __asm__ volatile("int $0x03"); // portable enough for lunix and binbows
     }
 }
 
@@ -297,25 +302,33 @@ auto main() -> int32_t
     SetDebugLabel(indexBuffer, GL_BUFFER, "IndexBuffer");
     glNamedBufferData(indexBuffer, indices.size() * sizeof(uint32_t), indices.data(), GL_STATIC_DRAW);
 
-    auto simpleProgramResult = CreateProgramPipeline(
+    auto simpleProgramPipelineResult = CreateProgramPipeline(
         "SimplePipeline",
         "data/shaders/Simple.vs.glsl",
         "data/shaders/Simple.fs.glsl");
-    if (!simpleProgramResult) {
-        spdlog::error(simpleProgramResult.error());
+    if (!simpleProgramPipelineResult) {
+        spdlog::error(simpleProgramPipelineResult.error());
         return -7;
     }
 
-    auto simpleProgram = *simpleProgramResult;
+    auto simpleProgramPipeline = *simpleProgramPipelineResult;
 
     glClearColor(0.04f, 0.05f, 0.06f, 1.0f);
 
+    glfwSwapInterval(0);
+
+    auto previousTimeInSeconds = glfwGetTime();
     while (!glfwWindowShouldClose(g_window)) {
         glfwPollEvents();
+
+        auto currentTimeInSeconds = glfwGetTime();
+        auto deltaTimeInSeconds = currentTimeInSeconds - previousTimeInSeconds;
+        previousTimeInSeconds = currentTimeInSeconds;
+
         glEnable(GL_FRAMEBUFFER_SRGB);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        glBindProgramPipeline(simpleProgram);
+        glBindProgramPipeline(simpleProgramPipeline);
 
         glVertexArrayVertexBuffer(defaultInputLayout, 0, vertexBuffer, 0, sizeof(SVertexPositionColor));
         glVertexArrayElementBuffer(defaultInputLayout, indexBuffer);
@@ -328,6 +341,12 @@ auto main() -> int32_t
         ImGui::NewFrame();
 
         if (ImGui::Begin("Huhu")) {
+            ImGui::Text("rps: %.2f rad/s", glm::two_pi<float>() * 1.0f / deltaTimeInSeconds);
+            ImGui::Text("dps: %.2f °/s", glm::degrees(glm::two_pi<float>() * 1.0f / deltaTimeInSeconds));
+            ImGui::Text("fps: %.2f", 1.0f / deltaTimeInSeconds);
+            ImGui::Text("rpms: %.2f", 1.0f / deltaTimeInSeconds * 60.0f);
+            ImGui::Text("ft: %.2f ms", deltaTimeInSeconds * 1000.0f);
+            //ImGui::Text("fpsHerX1 %4.4f", 1.240f * 1000.0f / deltaTimeInMilliSeconds);
 
         }
         ImGui::End();
@@ -341,7 +360,7 @@ auto main() -> int32_t
     glDeleteBuffers(1, &vertexBuffer);
     glDeleteBuffers(1, &indexBuffer);
     glDeleteVertexArrays(1, &defaultInputLayout);
-    glDeleteProgramPipelines(1, &simpleProgram);
+    glDeleteProgramPipelines(1, &simpleProgramPipeline);
 
     if (g_imguiContext != nullptr) {
         ImGui_ImplOpenGL3_Shutdown();
