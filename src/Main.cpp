@@ -55,30 +55,12 @@ static auto ReadTextFromFile(const std::string_view filePath) -> std::string {
     return result;
 }
 
-auto ObjectLabel(
+auto SetDebugLabel(
     const uint32_t object,
     const uint32_t objectType,
     const std::string_view label) -> void {
 
     glObjectLabel(objectType, object, static_cast<GLsizei>(label.size()), label.data());
-}
-
-auto LinkProgram(
-    const uint32_t program,
-    std::string& errorLog) -> bool {
-
-    int32_t linkStatus = 0;
-    glGetProgramiv(program, GL_LINK_STATUS, &linkStatus);
-    if (linkStatus == GL_FALSE)
-    {
-        int32_t length = 512;
-        glGetProgramiv(program, GL_INFO_LOG_LENGTH, &length);
-        errorLog.resize(length + 1, '\0');
-        glGetProgramInfoLog(program, length, nullptr, errorLog.data());
-        return false;
-    }
-
-    return true;
 }
 
 auto CreateProgram(
@@ -88,13 +70,21 @@ auto CreateProgram(
 
     const auto shaderSourcePtr = shaderSource.data();
     auto program = glCreateShaderProgramv(shaderType, 1, &shaderSourcePtr);
-    ObjectLabel(program, GL_PROGRAM, label);
+    SetDebugLabel(program, GL_PROGRAM, label);
     glProgramParameteri(program, GL_PROGRAM_SEPARABLE, GL_TRUE);
 
-    std::string errorLog;
-    if (!LinkProgram(program, errorLog)) {
+    int32_t linkStatus = 0;
+    glGetProgramiv(program, GL_LINK_STATUS, &linkStatus);
+    if (linkStatus == GL_FALSE)
+    {
+        std::string errorLog;
+        int32_t length = 512;
+        glGetProgramiv(program, GL_INFO_LOG_LENGTH, &length);
+        errorLog.resize(length + 1, '\0');
+        glGetProgramInfoLog(program, length, nullptr, errorLog.data());
         return std::unexpected(errorLog);
     }
+
     return program;
 }
 
@@ -118,7 +108,7 @@ auto CreateProgramPipeline(
 
     uint32_t pipeline = 0;
     glCreateProgramPipelines(1, &pipeline);
-    ObjectLabel(pipeline, GL_PROGRAM_PIPELINE, label);
+    SetDebugLabel(pipeline, GL_PROGRAM_PIPELINE, label);
     glUseProgramStages(pipeline, GL_VERTEX_SHADER_BIT, *vertexShaderResult);
     glUseProgramStages(pipeline, GL_FRAGMENT_SHADER_BIT, *fragmentShaderResult);
 
@@ -137,7 +127,7 @@ auto CreateProgramPipeline(
 
     uint32_t pipeline = 0;
     glCreateProgramPipelines(1, &pipeline);
-    ObjectLabel(GL_PROGRAM_PIPELINE, pipeline, label);
+    SetDebugLabel(GL_PROGRAM_PIPELINE, pipeline, label);
     glUseProgramStages(pipeline, GL_COMPUTE_SHADER_BIT, *computeShaderResult);
 
     return pipeline;
@@ -279,7 +269,7 @@ auto main() -> int32_t
 
     uint32_t defaultInputLayout = 0;
     glCreateVertexArrays(1, &defaultInputLayout);
-    ObjectLabel(defaultInputLayout, GL_VERTEX_ARRAY, "InputLayout");
+    SetDebugLabel(defaultInputLayout, GL_VERTEX_ARRAY, "InputLayout");
     glBindVertexArray(defaultInputLayout);
 
     glVertexArrayAttribFormat(defaultInputLayout, 0, 3, GL_FLOAT, false, offsetof(SVertexPositionColor, Position));
@@ -299,12 +289,12 @@ auto main() -> int32_t
 
     uint32_t vertexBuffer = 0;
     glCreateBuffers(1, &vertexBuffer);
-    ObjectLabel(vertexBuffer, GL_BUFFER, "VertexBuffer");
+    SetDebugLabel(vertexBuffer, GL_BUFFER, "VertexBuffer");
     glNamedBufferData(vertexBuffer, vertices.size() * sizeof(SVertexPositionColor), vertices.data(), GL_STATIC_DRAW);
 
     uint32_t indexBuffer = 0;
     glCreateBuffers(1, &indexBuffer);
-    ObjectLabel(indexBuffer, GL_BUFFER, "IndexBuffer");
+    SetDebugLabel(indexBuffer, GL_BUFFER, "IndexBuffer");
     glNamedBufferData(indexBuffer, indices.size() * sizeof(uint32_t), indices.data(), GL_STATIC_DRAW);
 
     auto simpleProgramResult = CreateProgramPipeline(
