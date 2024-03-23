@@ -309,6 +309,7 @@ auto main() -> int32_t
     auto& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_IsSRGB;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     ImGui::StyleColorsDark();
 
     if (!ImGui_ImplGlfw_InitForOpenGL(g_window, true)) {
@@ -487,7 +488,7 @@ auto main() -> int32_t
         ImGui::NewFrame();
 
         if (g_isEditor) {
-
+            ImGui::DockSpaceOverViewport(nullptr, ImGuiDockNodeFlags_PassthruCentralNode);
         }
 
         auto isOpen = true;
@@ -532,9 +533,8 @@ auto main() -> int32_t
                                    0, 0, g_framebufferSize.x, g_framebufferSize.y, GL_COLOR_BUFFER_BIT, GL_NEAREST);            
         }
 
-            ImGui::Render();
-            ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-
+        ImGui::Render();
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
         glfwSwapBuffers(g_window);
     }

@@ -15,9 +15,9 @@ add_subdirectory(glfw)
 
 add_subdirectory(glm)
 target_compile_definitions(glm INTERFACE
-        GLM_FORCE_AVX2
-        GLM_FORCE_RADIANS
-        GLM_FORCE_DEPTH_ZERO_TO_ONE
+    GLM_FORCE_AVX2
+    GLM_FORCE_RADIANS
+    GLM_FORCE_DEPTH_ZERO_TO_ONE
 )
 
 #- SPDLOG --------------------------------------------------------------------------------------------------------------
@@ -34,11 +34,11 @@ glad_add_library(glad REPRODUCIBLE EXCLUDE_FROM_ALL LOADER API gl:core=4.6)
 #- Dear ImGUI ----------------------------------------------------------------------------------------------------------
 
 FetchContent_Declare(
-        imgui
-        GIT_REPOSITORY https://github.com/ocornut/imgui
-        GIT_TAG        v1.90.4
-        GIT_SHALLOW    TRUE
-        GIT_PROGRESS   TRUE
+    imgui
+    GIT_REPOSITORY https://github.com/ocornut/imgui
+    GIT_TAG        docking
+    GIT_SHALLOW    TRUE
+    GIT_PROGRESS   TRUE
 )
 
 FetchContent_GetProperties(imgui)
