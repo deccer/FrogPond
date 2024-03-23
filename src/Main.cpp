@@ -51,6 +51,10 @@ struct SCameraInformation {
     glm::mat4x4 ViewMatrix;
 };
 
+struct SObject {
+    glm::mat4x4 WorldMatrix;
+};
+
 static auto ReadTextFromFile(const std::string_view filePath) -> std::string {
 
     std::ifstream file(filePath.data(), std::ios::ate);
@@ -178,7 +182,7 @@ auto main() -> int32_t
 {
     constexpr SWindowSettings windowSettings = {
         .ResolutionWidth = 1680,
-        .ResolutionHeight = 1050,
+        .ResolutionHeight = 720,
         .ResolutionScale = 1.0f,
         .WindowStyle = EWindowStyle::Windowed,
         .IsDebug = true
@@ -265,6 +269,8 @@ auto main() -> int32_t
         return -6;
     }
 
+    glfwSwapInterval(-1);
+
     glEnable(GL_FRAMEBUFFER_SRGB);
     glEnable(GL_CULL_FACE);
     glCullFace(GL_BACK);
@@ -313,9 +319,37 @@ auto main() -> int32_t
 
     auto simpleProgramPipeline = *simpleProgramPipelineResult;
 
-    glClearColor(0.04f, 0.05f, 0.06f, 1.0f);
+    auto cameraPosition = glm::vec3{0, 0, 10};
+    auto cameraDirection = glm::vec3{0, 0, -1};
+    auto cameraUp = glm::vec3{0, 1, 0};
+    SCameraInformation cameraInformation = {
+        .ProjectionMatrix = glm::perspectiveFovRH_ZO(glm::radians(60.0f), (float)g_framebufferHeight, (float)g_framebufferHeight, 0.1f, 1024.0f),
+        .ViewMatrix = glm::lookAt(cameraPosition, cameraPosition + cameraDirection, cameraUp)
+    };
 
-    glfwSwapInterval(0);
+    uint32_t cameraInformationBuffer = 0;
+    glCreateBuffers(1, &cameraInformationBuffer);
+    SetDebugLabel(cameraInformationBuffer, GL_BUFFER, "CameraInformation");
+    glNamedBufferData(cameraInformationBuffer, sizeof(SCameraInformation), &cameraInformation, GL_DYNAMIC_DRAW);
+
+    auto CreateWorldMatrix = [](float x, float y, float z) {
+        glm::mat4x4 matrix = glm::mat4x4(1.0f);
+        return glm::translate(matrix, glm::vec3(x, y, z));
+    };
+
+    std::vector<SObject> objects = {
+        {.WorldMatrix = CreateWorldMatrix(-4.0f, -2.0f, 0.0f)},
+        {.WorldMatrix = CreateWorldMatrix(+4.0f, -2.0f, 0.0f)},
+        {.WorldMatrix = CreateWorldMatrix(-4.0f, +2.0f, 0.0f)},
+        {.WorldMatrix = CreateWorldMatrix(+4.0f, +2.0f, 0.0f)},
+    };
+
+    uint32_t objectBuffer = 0;
+    glCreateBuffers(1, &objectBuffer);
+    SetDebugLabel(objectBuffer, GL_BUFFER, "Objects");
+    glNamedBufferData(objectBuffer, sizeof(SObject) * objects.size(), objects.data(), GL_DYNAMIC_DRAW);
+
+    glClearColor(0.04f, 0.05f, 0.06f, 1.0f);
 
     auto previousTimeInSeconds = glfwGetTime();
     while (!glfwWindowShouldClose(g_window)) {
@@ -332,8 +366,11 @@ auto main() -> int32_t
 
         glVertexArrayVertexBuffer(defaultInputLayout, 0, vertexBuffer, 0, sizeof(SVertexPositionColor));
         glVertexArrayElementBuffer(defaultInputLayout, indexBuffer);
+        glBindBufferBase(GL_UNIFORM_BUFFER, 0, cameraInformationBuffer);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, objectBuffer);
 
-        glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_INT, nullptr);
+        //glDrawElements(GL_TRIANGLES, indices.size(), GL_UNSIGNED_INT, nullptr);
+        glDrawElementsInstanced(GL_TRIANGLES, indices.size(), GL_UNSIGNED_INT, nullptr, objects.size());
 
         glDisable(GL_FRAMEBUFFER_SRGB);
         ImGui_ImplOpenGL3_NewFrame();
