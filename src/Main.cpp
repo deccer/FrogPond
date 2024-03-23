@@ -38,8 +38,15 @@ struct SWindowSettings {
 
 GLFWwindow* g_window = nullptr;
 ImGuiContext* g_imguiContext = nullptr;
-int32_t g_framebufferWidth = 0;
-int32_t g_framebufferHeight = 0;
+glm::ivec2 g_framebufferSize = glm::ivec2{0, 0};
+bool g_framebufferResized = true;
+bool g_sceneViewerResized = false;
+bool g_isEditor = false;
+int32_t g_sceneViewerWidth = 0;
+int32_t g_sceneViewerHeight = 0;
+uint32_t g_defaultInputLayout = 0;
+uint32_t g_fullscreenTrianglePipeline = 0;
+uint32_t g_fullscreenTriangleTextureSampler = 0;
 
 struct SVertexPositionColor {
     glm::vec3 Position;
@@ -152,6 +159,11 @@ auto OnKey(
     if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
         glfwSetWindowShouldClose(window, GLFW_TRUE);
     }
+    if (key == GLFW_KEY_F1 && action == GLFW_PRESS) {
+        g_isEditor = !g_isEditor;
+        g_framebufferResized = !g_isEditor;
+        g_sceneViewerResized = g_isEditor;
+    }
 }
 
 auto OnWindowFramebufferSizeChanged(
@@ -159,8 +171,8 @@ auto OnWindowFramebufferSizeChanged(
     const int width,
     const int height) -> void {
 
-    g_framebufferWidth = width;
-    g_framebufferHeight = height;
+    g_framebufferSize = glm::ivec2{width, height};
+    g_framebufferResized = true;
 }
 
 auto OnOpenGLDebugMessage(
@@ -176,6 +188,46 @@ auto OnOpenGLDebugMessage(
         spdlog::error(message);
         __asm__ volatile("int $0x03"); // portable enough for lunix and binbows
     }
+}
+
+auto static CreateFullscreenTriangleProgramPipeline() -> uint32_t
+{
+    auto fullscreenTrianglePipelineResult = CreateProgramPipeline("FST", "data/shaders/FST.vs.glsl", "data/shaders/FST.fs.glsl");
+    if (!fullscreenTrianglePipelineResult) {
+        auto errorMessage = fullscreenTrianglePipelineResult.error();
+        glDebugMessageInsert(GL_DEBUG_SOURCE_APPLICATION, GL_DEBUG_TYPE_ERROR, 0, GL_DEBUG_SEVERITY_HIGH, errorMessage.size(), errorMessage.data());
+    }
+    return *fullscreenTrianglePipelineResult;
+}
+
+auto static CreateTextureSampler() -> uint32_t {
+    uint32_t sampler = 0;
+    glCreateSamplers(1, &sampler);
+    glSamplerParameteri(sampler, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glSamplerParameteri(sampler, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glSamplerParameteri(sampler, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glSamplerParameteri(sampler, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glSamplerParameterf(sampler, GL_TEXTURE_LOD_BIAS, 0.0f);
+    glSamplerParameteri(sampler, GL_TEXTURE_MIN_LOD, -1000);
+    glSamplerParameteri(sampler, GL_TEXTURE_MAX_LOD, 1000);
+    return sampler;
+}
+
+auto DrawFullscreenTriangle(uint32_t texture) -> void {
+    
+    if (g_fullscreenTrianglePipeline == 0) {
+        g_fullscreenTrianglePipeline = CreateFullscreenTriangleProgramPipeline();
+        g_fullscreenTriangleTextureSampler = CreateTextureSampler();
+    }
+
+    glBindProgramPipeline(g_fullscreenTrianglePipeline);
+    glBindTextureUnit(0, texture);
+    glBindSampler(0, g_fullscreenTriangleTextureSampler);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    glVertexArrayVertexBuffer(g_defaultInputLayout, 0, 0, 0, 0);
+    glVertexArrayElementBuffer(g_defaultInputLayout, 0);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
 }
 
 auto main() -> int32_t
@@ -275,22 +327,20 @@ auto main() -> int32_t
     glEnable(GL_CULL_FACE);
     glCullFace(GL_BACK);
     glFrontFace(GL_CCW);
-    glClearColor(0.04f, 0.05f, 0.06f, 1.0f);
 
-    glViewport(0, 0, g_framebufferWidth, g_framebufferHeight);
+    glViewport(0, 0, g_framebufferSize.x, g_framebufferSize.y);
 
-    uint32_t defaultInputLayout = 0;
-    glCreateVertexArrays(1, &defaultInputLayout);
-    SetDebugLabel(defaultInputLayout, GL_VERTEX_ARRAY, "InputLayout");
-    glBindVertexArray(defaultInputLayout);
+    glCreateVertexArrays(1, &g_defaultInputLayout);
+    SetDebugLabel(g_defaultInputLayout, GL_VERTEX_ARRAY, "InputLayout");
+    glBindVertexArray(g_defaultInputLayout);
 
-    glVertexArrayAttribFormat(defaultInputLayout, 0, 3, GL_FLOAT, false, offsetof(SVertexPositionColor, Position));
-    glVertexArrayAttribBinding(defaultInputLayout, 0, 0);
-    glEnableVertexArrayAttrib(defaultInputLayout, 0);
+    glVertexArrayAttribFormat(g_defaultInputLayout, 0, 3, GL_FLOAT, false, offsetof(SVertexPositionColor, Position));
+    glVertexArrayAttribBinding(g_defaultInputLayout, 0, 0);
+    glEnableVertexArrayAttrib(g_defaultInputLayout, 0);
 
-    glVertexArrayAttribFormat(defaultInputLayout, 1, 4, GL_FLOAT, false, offsetof(SVertexPositionColor, Color));
-    glVertexArrayAttribBinding(defaultInputLayout, 1, 0);
-    glEnableVertexArrayAttrib(defaultInputLayout, 1);
+    glVertexArrayAttribFormat(g_defaultInputLayout, 1, 4, GL_FLOAT, false, offsetof(SVertexPositionColor, Color));
+    glVertexArrayAttribBinding(g_defaultInputLayout, 1, 0);
+    glEnableVertexArrayAttrib(g_defaultInputLayout, 1);
 
     std::vector<SVertexPositionColor> vertices = {
         SVertexPositionColor{{+0.0f, +0.5f, +0.0f}, {1.0f, 0.0f, 0.0f, 1.0f}},
@@ -324,7 +374,7 @@ auto main() -> int32_t
     auto cameraDirection = glm::vec3{0, 0, -1};
     auto cameraUp = glm::vec3{0, 1, 0};
     SCameraInformation cameraInformation = {
-        .ProjectionMatrix = glm::perspectiveFovRH_ZO(glm::radians(60.0f), (float)g_framebufferHeight, (float)g_framebufferHeight, 0.1f, 1024.0f),
+        .ProjectionMatrix = glm::perspectiveFovRH_ZO(glm::radians(60.0f), (float)g_framebufferSize.x, (float)g_framebufferSize.x, 0.1f, 1024.0f),
         .ViewMatrix = glm::lookAt(cameraPosition, cameraPosition + cameraDirection, cameraUp)
     };
 
@@ -334,21 +384,48 @@ auto main() -> int32_t
     glNamedBufferData(cameraInformationBuffer, sizeof(SCameraInformation), &cameraInformation, GL_DYNAMIC_DRAW);
 
     auto CreateWorldMatrix = [](float x, float y, float z) {
-        glm::mat4x4 matrix = glm::mat4x4(1.0f);
-        return glm::translate(matrix, glm::vec3(x, y, z));
+        return glm::translate(glm::mat4x4(1.0f), glm::vec3(x, y, z));
     };
 
     std::vector<SObject> objects = {
-        {.WorldMatrix = CreateWorldMatrix(-4.0f, -2.0f, 0.0f)},
-        {.WorldMatrix = CreateWorldMatrix(+4.0f, -2.0f, 0.0f)},
-        {.WorldMatrix = CreateWorldMatrix(-4.0f, +2.0f, 0.0f)},
-        {.WorldMatrix = CreateWorldMatrix(+4.0f, +2.0f, 0.0f)},
+        {.WorldMatrix = CreateWorldMatrix(-2.0f, -2.0f, 0.0f)},
+        {.WorldMatrix = CreateWorldMatrix(+2.0f, -2.0f, 0.0f)},
+        {.WorldMatrix = CreateWorldMatrix(-2.0f, +2.0f, 0.0f)},
+        {.WorldMatrix = CreateWorldMatrix(+2.0f, +2.0f, 0.0f)},
     };
 
     uint32_t objectBuffer = 0;
     glCreateBuffers(1, &objectBuffer);
     SetDebugLabel(objectBuffer, GL_BUFFER, "Objects");
     glNamedBufferData(objectBuffer, sizeof(SObject) * objects.size(), objects.data(), GL_DYNAMIC_DRAW);
+
+    uint32_t mainTexture = 0;
+    glCreateTextures(GL_TEXTURE_2D, 1, &mainTexture);
+    SetDebugLabel(mainTexture, GL_TEXTURE, std::format("MainTexture_{}x{}", g_framebufferSize.x, g_framebufferSize.y));
+    glTextureStorage2D(mainTexture, 1, GL_RGBA8, g_framebufferSize.x, g_framebufferSize.y);
+
+    uint32_t mainFramebuffer = 0;
+    glCreateFramebuffers(1, &mainFramebuffer);
+    SetDebugLabel(mainTexture, GL_FRAMEBUFFER, "MainFramebuffer");    
+    glNamedFramebufferTexture(mainFramebuffer, GL_COLOR_ATTACHMENT0, mainTexture, 0);
+
+    auto mainFramebufferStatus = glCheckNamedFramebufferStatus(mainFramebuffer, GL_FRAMEBUFFER);
+    if (mainFramebufferStatus != GL_FRAMEBUFFER_COMPLETE) {
+        auto errorMessage = std::string("Framebuffer incomplete");
+        glDebugMessageInsert(GL_DEBUG_SOURCE_APPLICATION, GL_DEBUG_TYPE_ERROR, 0, GL_DEBUG_SEVERITY_HIGH, errorMessage.size(), errorMessage.data());
+        return -10;
+    }
+    glNamedFramebufferDrawBuffer(mainFramebuffer, GL_COLOR_ATTACHMENT0);
+
+    auto lastProgramPipeline = 0;
+    auto lastFramebuffer = 0;
+    auto lastInputLayout = 0;
+
+    auto isSrgbDisabled = false;
+    auto isCullfaceDisabled = false;
+
+    g_sceneViewerWidth = g_framebufferSize.x;
+    g_sceneViewerHeight = g_framebufferSize.y;
 
     auto previousTimeInSeconds = glfwGetTime();
     while (!glfwWindowShouldClose(g_window)) {
@@ -358,45 +435,116 @@ auto main() -> int32_t
         auto deltaTimeInSeconds = currentTimeInSeconds - previousTimeInSeconds;
         previousTimeInSeconds = currentTimeInSeconds;
 
-        glEnable(GL_FRAMEBUFFER_SRGB);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        auto framebufferWasResized = false;
+        if (g_isEditor) {
+            glViewport(0, 0, g_sceneViewerWidth, g_sceneViewerHeight);
+            if (g_sceneViewerResized) {
+
+                glDeleteTextures(1, &mainTexture);
+                glCreateTextures(GL_TEXTURE_2D, 1, &mainTexture);
+                SetDebugLabel(mainTexture, GL_TEXTURE, std::format("MainTexture_{}x{}", g_sceneViewerWidth, g_sceneViewerHeight));
+                glTextureStorage2D(mainTexture, 1, GL_RGBA8, g_sceneViewerWidth, g_sceneViewerHeight);            
+                glNamedFramebufferTexture(mainFramebuffer, GL_COLOR_ATTACHMENT0, mainTexture, 0);
+
+                g_sceneViewerResized = false;
+                framebufferWasResized = true;                
+            }
+        } else {
+            glViewport(0, 0, g_framebufferSize.x, g_framebufferSize.y);
+            if (g_framebufferResized) {
+                glDeleteTextures(1, &mainTexture);
+                glCreateTextures(GL_TEXTURE_2D, 1, &mainTexture);
+                SetDebugLabel(mainTexture, GL_TEXTURE, std::format("MainTexture_{}x{}", g_framebufferSize.x, g_framebufferSize.y));
+                glTextureStorage2D(mainTexture, 1, GL_RGBA8, g_framebufferSize.x, g_framebufferSize.y);            
+                glNamedFramebufferTexture(mainFramebuffer, GL_COLOR_ATTACHMENT0, mainTexture, 0);
+
+                g_framebufferResized = false;
+                framebufferWasResized = true;
+            }
+        }
+
+        if (isSrgbDisabled) {
+            glEnable(GL_FRAMEBUFFER_SRGB);
+            isSrgbDisabled = false;
+        }
+
+        glClearNamedFramebufferfv(mainFramebuffer, GL_COLOR, 0, glm::value_ptr(glm::vec3{0.3f, 0.2f, 0.1f}));
 
         glBindProgramPipeline(simpleProgramPipeline);
+        glBindFramebuffer(GL_FRAMEBUFFER, mainFramebuffer);
+        glVertexArrayVertexBuffer(g_defaultInputLayout, 0, vertexBuffer, 0, sizeof(SVertexPositionColor));
+        glVertexArrayElementBuffer(g_defaultInputLayout, indexBuffer);
 
-        glVertexArrayVertexBuffer(defaultInputLayout, 0, vertexBuffer, 0, sizeof(SVertexPositionColor));
-        glVertexArrayElementBuffer(defaultInputLayout, indexBuffer);
         glBindBufferBase(GL_UNIFORM_BUFFER, 0, cameraInformationBuffer);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, objectBuffer);
-
-        //glDrawElements(GL_TRIANGLES, indices.size(), GL_UNSIGNED_INT, nullptr);
         glDrawElementsInstanced(GL_TRIANGLES, indices.size(), GL_UNSIGNED_INT, nullptr, objects.size());
 
-        glDisable(GL_FRAMEBUFFER_SRGB);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);        
+       
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
+
+        if (g_isEditor) {
+
+        }
 
         auto isOpen = true;
         ImGui::SetNextWindowPos({32, 32});
         ImGui::SetNextWindowSize({192, 128});
         if (ImGui::Begin("Huhu", &isOpen, ImGuiWindowFlags_::ImGuiWindowFlags_Modal | ImGuiWindowFlags_::ImGuiWindowFlags_NoDecoration)) {
-            ImGui::Text("rps: %.2f rad/s", glm::two_pi<float>() * 1.0f / deltaTimeInSeconds);
-            ImGui::Text("dps: %.2f °/s", glm::degrees(glm::two_pi<float>() * 1.0f / deltaTimeInSeconds));
-            ImGui::Text("fps: %.2f", 1.0f / deltaTimeInSeconds);
-            ImGui::Text("rpms: %.2f", 1.0f / deltaTimeInSeconds * 60.0f);
+
+            ImGui::TextColored(ImVec4{0.8f, 0.6f, 0.2f, 1.0f}, "Press F1 to toggle editor");
+            ImGui::Separator();
+
+            auto framesPerSecond = 1.0f / deltaTimeInSeconds;
+            ImGui::Text("rps: %.2f rad/s", glm::two_pi<float>() * framesPerSecond);
+            ImGui::Text("dps: %.2f °/s", glm::degrees(glm::two_pi<float>() * framesPerSecond));
+            ImGui::Text("fps: %.2f", framesPerSecond);
+            ImGui::Text("rpms: %.2f", framesPerSecond * 60.0f);
             ImGui::Text("ft: %.2f ms", deltaTimeInSeconds * 1000.0f);
         }
         ImGui::End();
 
-        ImGui::Render();
-        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        if (g_isEditor) {            
+
+            glDisable(GL_FRAMEBUFFER_SRGB);
+            isSrgbDisabled = true;
+
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
+            if (ImGui::Begin("Scene")) {
+                auto availableSceneWindowSize = ImGui::GetContentRegionAvail();
+                if (availableSceneWindowSize.x != g_sceneViewerWidth || availableSceneWindowSize.y != g_sceneViewerHeight) {
+                    g_sceneViewerWidth = availableSceneWindowSize.x;
+                    g_sceneViewerHeight = availableSceneWindowSize.y;
+                    g_sceneViewerResized = true;
+                }
+                ImGui::Image(reinterpret_cast<ImTextureID>(mainTexture), availableSceneWindowSize, ImVec2(0, 1), ImVec2(1, 0));
+            }
+            ImGui::PopStyleVar();
+            ImGui::End();
+        } else {
+            //DrawFullscreenTriangle(mainTexture);
+
+            glBlitNamedFramebuffer(mainFramebuffer, 0,
+                                   0, 0, g_framebufferSize.x, g_framebufferSize.y,
+                                   0, 0, g_framebufferSize.x, g_framebufferSize.y, GL_COLOR_BUFFER_BIT, GL_NEAREST);            
+        }
+
+            ImGui::Render();
+            ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
 
         glfwSwapBuffers(g_window);
     }
 
+    glDeleteTextures(1, &mainTexture);
+    glDeleteFramebuffers(1, &mainFramebuffer);
+
     glDeleteBuffers(1, &vertexBuffer);
     glDeleteBuffers(1, &indexBuffer);
-    glDeleteVertexArrays(1, &defaultInputLayout);
+    glDeleteVertexArrays(1, &g_defaultInputLayout);
     glDeleteProgramPipelines(1, &simpleProgramPipeline);
 
     if (g_imguiContext != nullptr) {
