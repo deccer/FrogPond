@@ -269,12 +269,13 @@ auto main() -> int32_t
         return -6;
     }
 
-    glfwSwapInterval(-1);
+    glfwSwapInterval(1);
 
     glEnable(GL_FRAMEBUFFER_SRGB);
     glEnable(GL_CULL_FACE);
     glCullFace(GL_BACK);
     glFrontFace(GL_CCW);
+    glClearColor(0.04f, 0.05f, 0.06f, 1.0f);
 
     glViewport(0, 0, g_framebufferWidth, g_framebufferHeight);
 
@@ -349,8 +350,6 @@ auto main() -> int32_t
     SetDebugLabel(objectBuffer, GL_BUFFER, "Objects");
     glNamedBufferData(objectBuffer, sizeof(SObject) * objects.size(), objects.data(), GL_DYNAMIC_DRAW);
 
-    glClearColor(0.04f, 0.05f, 0.06f, 1.0f);
-
     auto previousTimeInSeconds = glfwGetTime();
     while (!glfwWindowShouldClose(g_window)) {
         glfwPollEvents();
@@ -377,14 +376,15 @@ auto main() -> int32_t
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        if (ImGui::Begin("Huhu")) {
+        auto isOpen = true;
+        ImGui::SetNextWindowPos({32, 32});
+        ImGui::SetNextWindowSize({192, 128});
+        if (ImGui::Begin("Huhu", &isOpen, ImGuiWindowFlags_::ImGuiWindowFlags_Modal | ImGuiWindowFlags_::ImGuiWindowFlags_NoDecoration)) {
             ImGui::Text("rps: %.2f rad/s", glm::two_pi<float>() * 1.0f / deltaTimeInSeconds);
             ImGui::Text("dps: %.2f °/s", glm::degrees(glm::two_pi<float>() * 1.0f / deltaTimeInSeconds));
             ImGui::Text("fps: %.2f", 1.0f / deltaTimeInSeconds);
             ImGui::Text("rpms: %.2f", 1.0f / deltaTimeInSeconds * 60.0f);
             ImGui::Text("ft: %.2f ms", deltaTimeInSeconds * 1000.0f);
-            //ImGui::Text("fpsHerX1 %4.4f", 1.240f * 1000.0f / deltaTimeInMilliSeconds);
-
         }
         ImGui::End();
 
