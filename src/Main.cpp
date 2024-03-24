@@ -15,9 +15,14 @@
 #include <filesystem>
 #include <algorithm>
 #include <iterator>
+#include <iostream>
+#include <sstream>
 #include <fstream>
 #include <string_view>
 #include <expected>
+#include <memory>
+#include <utility>
+#include <span>
 
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
@@ -38,6 +43,52 @@ struct SWindowSettings {
     bool IsDebug;
 };
 
+struct SVertexPositionUv {
+    glm::vec3 Position;
+    glm::vec2 Uv;
+};
+
+struct SVertexPositionColor {
+    glm::vec3 Position;
+    glm::vec4 Color;
+};
+
+struct SGlobalUniforms {
+    glm::mat4 OldProjectionMatrix;
+    glm::mat4 OldViewMatrix;
+    glm::mat4 OldViewProjectionMatrix;
+    glm::mat4 ProjectionMatrix;
+    glm::mat4 ViewMatrix;
+    glm::mat4 ViewProjectionMatrix;
+    glm::vec4 CameraPosition;
+    glm::vec4 FrustumPlanes[6];
+    glm::vec4 Viewport;
+};
+
+struct SObject {
+    glm::mat4x4 WorldMatrix;
+};
+
+struct SCamera {
+
+    glm::vec3 Position = {0.0f, 0.0f, 5.0f};
+    float Pitch = {};
+    float Yaw = {glm::radians(-90.0f)};
+
+    auto GetForwardDirection() -> const glm::vec3
+    {
+        return glm::vec3{cos(Pitch) * cos(Yaw), sin(Pitch), cos(Pitch) * sin(Yaw)};
+    }
+
+    auto GetViewMatrix() -> const glm::mat4
+    {
+        return glm::lookAt(Position, Position + GetForwardDirection(), glm::vec3(0, 1, 0));
+    }
+};
+
+constexpr ImVec2 g_imvec2UnitX = ImVec2(1, 0);
+constexpr ImVec2 g_imvec2UnitY = ImVec2(0, 1);
+
 GLFWwindow* g_window = nullptr;
 ImGuiContext* g_imguiContext = nullptr;
 ImPlotContext* g_implotContext = nullptr;
@@ -51,35 +102,31 @@ uint32_t g_defaultInputLayout = 0;
 uint32_t g_fullscreenTrianglePipeline = 0;
 uint32_t g_samplerNearestNearestClampToEdge = 0;
 
-struct SVertexPositionUv {
-    glm::vec3 Position;
-    glm::vec2 Uv;
-};
+SCamera g_mainCamera = {};
+glm::dvec2 g_cursorPosition = {};
+glm::dvec2 g_cursorFrameOffset = {};
+float g_cursorSensitivity = 0.0025f;
+float g_cameraSpeed = 4.0f;
 
-struct SVertexPositionColor {
-    glm::vec3 Position;
-    glm::vec4 Color;
-};
+bool g_cursorIsActive = true;
+bool g_cursorJustEntered = false;
 
-struct SCameraInformation {
-    glm::mat4x4 ProjectionMatrix;
-    glm::mat4x4 ViewMatrix;
-};
+auto inline ReadTextFromFile(const std::filesystem::path& filePath) -> std::string {
 
-struct SObject {
-    glm::mat4x4 WorldMatrix;
-};
-
-auto ReadTextFromFile(const std::string_view filePath) -> std::string {
-
-    std::ifstream file(filePath.data(), std::ios::ate);
-    std::string result(file.tellg(), '\0');
-    file.seekg(0);
-    file.read(result.data(), result.size());
-    return result;
+    std::ifstream fileStream{filePath};
+    return {std::istreambuf_iterator<char>(fileStream), std::istreambuf_iterator<char>()};
 }
 
-auto SetDebugLabel(
+auto inline ReadBinaryFromFile(const std::filesystem::path& filePath) -> std::pair<std::unique_ptr<std::byte[]>, std::size_t>
+{
+    std::size_t fileSize = std::filesystem::file_size(filePath);
+    auto memory = std::make_unique<std::byte[]>(fileSize);
+    std::ifstream file{filePath, std::ifstream::binary};
+    std::copy(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>(), reinterpret_cast<char*>(memory.get()));
+    return {std::move(memory), fileSize};
+}
+
+auto inline SetDebugLabel(
     const uint32_t object,
     const uint32_t objectType,
     const std::string_view label) -> void {
@@ -182,6 +229,32 @@ auto OnKey(
     }
 }
 
+auto OnCursorEntered(
+    [[maybe_unused]] GLFWwindow* window,
+    int entered) -> void {
+
+    if (entered) {
+        g_cursorJustEntered = true;
+    }
+}
+
+auto OnCursorPosition(
+    [[maybe_unused]] GLFWwindow* window,
+    double cursorPositionX,
+    double cursorPositionY) -> void {
+
+    if (g_cursorJustEntered)
+    {
+        g_cursorPosition = {cursorPositionX, cursorPositionY};
+        g_cursorJustEntered = false;
+    }        
+
+    g_cursorFrameOffset += glm::dvec2{
+        cursorPositionX - g_cursorPosition.x, 
+        g_cursorPosition.y - cursorPositionY};
+    g_cursorPosition = {cursorPositionX, cursorPositionY};
+}
+
 auto OnWindowFramebufferSizeChanged(
     [[maybe_unused]] GLFWwindow* window,
     const int width,
@@ -237,6 +310,70 @@ auto DrawFullscreenTriangle(uint32_t texture) -> void {
     glDrawArrays(GL_TRIANGLES, 0, 3);
 }
 
+auto HandleCamera(float deltaTimeInSeconds) -> void {
+
+    g_cursorIsActive = glfwGetMouseButton(g_window, GLFW_MOUSE_BUTTON_2) == GLFW_RELEASE;
+    glfwSetInputMode(g_window, GLFW_CURSOR, g_cursorIsActive ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
+
+    if (!g_cursorIsActive)
+    {
+        glfwSetCursorPos(g_window, 0, 0);
+        g_cursorPosition.x = 0;
+        g_cursorPosition.y = 0;
+    }
+
+    if (!g_cursorIsActive) {
+
+        const glm::vec3 forward = g_mainCamera.GetForwardDirection();
+        const glm::vec3 right = glm::normalize(glm::cross(forward, {0, 1, 0}));
+
+        float tempCameraSpeed = g_cameraSpeed;
+        if (glfwGetKey(g_window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) {
+            tempCameraSpeed *= 4.0f;
+        }
+        if (glfwGetKey(g_window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS) {
+            tempCameraSpeed *= 0.25f;
+        }
+        if (glfwGetKey(g_window, GLFW_KEY_W) == GLFW_PRESS) {
+            g_mainCamera.Position += forward * deltaTimeInSeconds * tempCameraSpeed;
+        }
+        if (glfwGetKey(g_window, GLFW_KEY_S) == GLFW_PRESS) {
+            g_mainCamera.Position -= forward * deltaTimeInSeconds * tempCameraSpeed;
+        }
+        if (glfwGetKey(g_window, GLFW_KEY_D) == GLFW_PRESS) {
+            g_mainCamera.Position += right * deltaTimeInSeconds * tempCameraSpeed;
+        }
+        if (glfwGetKey(g_window, GLFW_KEY_A) == GLFW_PRESS) {
+            g_mainCamera.Position -= right * deltaTimeInSeconds * tempCameraSpeed;
+        }
+        if (glfwGetKey(g_window, GLFW_KEY_Q) == GLFW_PRESS) {
+            g_mainCamera.Position.y -= deltaTimeInSeconds * tempCameraSpeed;
+        }
+        if (glfwGetKey(g_window, GLFW_KEY_E) == GLFW_PRESS) {
+            g_mainCamera.Position.y += deltaTimeInSeconds * tempCameraSpeed;
+        }
+
+        g_mainCamera.Yaw += static_cast<float>(g_cursorFrameOffset.x * g_cursorSensitivity);
+        g_mainCamera.Pitch += static_cast<float>(g_cursorFrameOffset.y * g_cursorSensitivity);
+        g_mainCamera.Pitch = glm::clamp(g_mainCamera.Pitch, -glm::half_pi<float>() + 1e-4f, glm::half_pi<float>() - 1e-4f);    
+    }
+
+    g_cursorFrameOffset = {0.0, 0.0};
+}
+
+auto inline CreateBuffer(
+    std::string_view label,
+    size_t sizeInBytes,
+    const void* data,
+    uint32_t flags) -> uint32_t {
+
+    uint32_t buffer = 0;
+    glCreateBuffers(1, &buffer);
+    SetDebugLabel(buffer, GL_BUFFER, label);
+    glNamedBufferData(buffer, sizeInBytes, data, flags);
+    return buffer;
+}
+
 auto main() -> int32_t {
 
     SWindowSettings windowSettings = {
@@ -254,6 +391,8 @@ auto main() -> int32_t {
     const auto isWindowWindowed = windowSettings.WindowStyle == EWindowStyle::Windowed;
     glfwWindowHint(GLFW_DECORATED, isWindowWindowed ? GLFW_TRUE : GLFW_FALSE);
     glfwWindowHint(GLFW_RESIZABLE, isWindowWindowed ? GLFW_TRUE : GLFW_FALSE);
+    glfwWindowHint(GLFW_DOUBLEBUFFER, GLFW_TRUE);
+    glfwWindowHint(GLFW_SRGB_CAPABLE, GLFW_TRUE);
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_API);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
@@ -293,7 +432,10 @@ auto main() -> int32_t {
     }
 
     glfwSetKeyCallback(g_window, OnKey);
+    glfwSetCursorPosCallback(g_window, OnCursorPosition);
+    glfwSetCursorEnterCallback(g_window, OnCursorEntered);    
     glfwSetFramebufferSizeCallback(g_window, OnWindowFramebufferSizeChanged);
+    glfwSetInputMode(g_window, GLFW_CURSOR, g_cursorIsActive ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
 
     int32_t framebufferWidth = 0;
     int32_t framebufferHeight = 0;
@@ -330,7 +472,7 @@ auto main() -> int32_t {
         return -6;
     }
 
-    glfwSwapInterval(0);
+    glfwSwapInterval(1);
 
     glEnable(GL_FRAMEBUFFER_SRGB);
     glEnable(GL_CULL_FACE);
@@ -346,15 +488,8 @@ auto main() -> int32_t {
     };
     std::vector<uint32_t> indices = {0, 1, 2};
 
-    uint32_t vertexBuffer = 0;
-    glCreateBuffers(1, &vertexBuffer);
-    SetDebugLabel(vertexBuffer, GL_BUFFER, "VertexBuffer");
-    glNamedBufferData(vertexBuffer, vertices.size() * sizeof(SVertexPositionColor), vertices.data(), GL_STATIC_DRAW);
-
-    uint32_t indexBuffer = 0;
-    glCreateBuffers(1, &indexBuffer);
-    SetDebugLabel(indexBuffer, GL_BUFFER, "IndexBuffer");
-    glNamedBufferData(indexBuffer, indices.size() * sizeof(uint32_t), indices.data(), GL_STATIC_DRAW);
+    auto vertexBuffer = CreateBuffer("VertexBuffer", sizeof(SVertexPositionColor) * vertices.size(), vertices.data(), GL_STATIC_DRAW);
+    auto indexBuffer = CreateBuffer("IndexBuffer", sizeof(uint32_t) * indices.size(), indices.data(), GL_STATIC_DRAW);
 
     auto simpleProgramPipelineResult = CreateProgramPipeline(
         "SimplePipeline",
@@ -367,18 +502,13 @@ auto main() -> int32_t {
 
     auto simpleProgramPipeline = *simpleProgramPipelineResult;
 
-    auto cameraPosition = glm::vec3{0, 0, 10};
-    auto cameraDirection = glm::vec3{0, 0, -1};
-    auto cameraUp = glm::vec3{0, 1, 0};
-    SCameraInformation cameraInformation = {
+    SGlobalUniforms globalUniforms = {
         .ProjectionMatrix = glm::perspectiveFovRH_ZO(glm::radians(60.0f), (float)g_framebufferSize.x, (float)g_framebufferSize.x, 0.1f, 1024.0f),
-        .ViewMatrix = glm::lookAt(cameraPosition, cameraPosition + cameraDirection, cameraUp)
+        .ViewMatrix = g_mainCamera.GetViewMatrix(),
+        .CameraPosition = glm::vec4(g_mainCamera.Position, 0.0f)
     };
 
-    uint32_t cameraInformationBuffer = 0;
-    glCreateBuffers(1, &cameraInformationBuffer);
-    SetDebugLabel(cameraInformationBuffer, GL_BUFFER, "CameraInformation");
-    glNamedBufferData(cameraInformationBuffer, sizeof(SCameraInformation), &cameraInformation, GL_DYNAMIC_DRAW);
+    auto globalUniformsBuffer = CreateBuffer("GlobalUniforms", sizeof(SGlobalUniforms), &globalUniforms, GL_DYNAMIC_DRAW);
 
     auto CreateWorldMatrix = [](float x, float y, float z) {
         return glm::translate(glm::mat4x4(1.0f), glm::vec3(x, y, z));
@@ -391,10 +521,7 @@ auto main() -> int32_t {
         {.WorldMatrix = CreateWorldMatrix(+2.0f, +2.0f, 0.0f)},
     };
 
-    uint32_t objectBuffer = 0;
-    glCreateBuffers(1, &objectBuffer);
-    SetDebugLabel(objectBuffer, GL_BUFFER, "Objects");
-    glNamedBufferData(objectBuffer, sizeof(SObject) * objects.size(), objects.data(), GL_DYNAMIC_DRAW);
+    auto objectBuffer = CreateBuffer("Objects", sizeof(SObject) * objects.size(), objects.data(), GL_DYNAMIC_DRAW);
 
     uint32_t mainTexture = 0;
     glCreateTextures(GL_TEXTURE_2D, 1, &mainTexture);
@@ -433,6 +560,15 @@ auto main() -> int32_t {
         auto deltaTimeInSeconds = currentTimeInSeconds - previousTimeInSeconds;
         accumulatedTimeInSeconds += deltaTimeInSeconds;
         previousTimeInSeconds = currentTimeInSeconds;
+
+        HandleCamera(deltaTimeInSeconds);
+        globalUniforms = {
+            .ProjectionMatrix = glm::perspectiveFovRH_ZO(glm::radians(60.0f), (float)g_framebufferSize.x, (float)g_framebufferSize.x, 0.1f, 1024.0f),
+            .ViewMatrix = g_mainCamera.GetViewMatrix(),
+            .CameraPosition = glm::vec4(g_mainCamera.Position, 0.0f)
+        };
+
+        glNamedBufferSubData(globalUniformsBuffer, 0, sizeof(SGlobalUniforms), &globalUniforms);
 
         auto framebufferWasResized = false;
         if (g_isEditor) {
@@ -483,7 +619,7 @@ auto main() -> int32_t {
 
         glVertexArrayElementBuffer(g_defaultInputLayout, indexBuffer);
 
-        glBindBufferBase(GL_UNIFORM_BUFFER, 0, cameraInformationBuffer);
+        glBindBufferBase(GL_UNIFORM_BUFFER, 0, globalUniformsBuffer);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, vertexBuffer);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, objectBuffer);
         glDrawElementsInstanced(GL_TRIANGLES, indices.size(), GL_UNSIGNED_INT, nullptr, objects.size());
@@ -491,8 +627,6 @@ auto main() -> int32_t {
         PopDebugGroup();
 
         // UI Pass
-
-        PushDebugGroup("UI");
 
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);        
@@ -533,13 +667,23 @@ auto main() -> int32_t {
                     g_framebufferResized = true;
                 }
             }
+            auto position = g_mainCamera.Position;
+            auto direction = g_mainCamera.GetForwardDirection();
+            ImGui::Text("Camera Pos %f %f %f", position.x, position.y, position.z);
+            ImGui::Text("Camera Dir %f %f %f", direction.x, direction.y, direction.z);
+
+            ImGui::Separator();
+            ImGui::Text("Cursor entered  %b", g_cursorJustEntered ? true : false);
+            ImGui::Text("Cursor active  %b", g_cursorIsActive ? true : false);
+            ImGui::Text("Cursor Sens  %.3f", g_cursorSensitivity);
+            ImGui::Text("Cursor Pos  %.3f %.3f", g_cursorPosition.x, g_cursorPosition.y);
+            ImGui::Text("Cursor PosF %.3f %.3f", g_cursorFrameOffset.x, g_cursorFrameOffset.y);
+            ImGui::Text("Pitch %.3f", g_mainCamera.Pitch);
+            ImGui::Text("Yar %.3f", g_mainCamera.Yaw);
         }
         ImGui::End();
 
         if (g_isEditor) {            
-
-            glDisable(GL_FRAMEBUFFER_SRGB);
-            isSrgbDisabled = true;
 
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
             if (ImGui::Begin("Scene")) {
@@ -548,7 +692,7 @@ auto main() -> int32_t {
                     g_sceneViewerSize = glm::ivec2(availableSceneWindowSize.x, availableSceneWindowSize.y);
                     g_sceneViewerResized = true;
                 }
-                ImGui::Image(reinterpret_cast<ImTextureID>(mainTexture), availableSceneWindowSize, ImVec2(0, 1), ImVec2(1, 0));
+                ImGui::Image(reinterpret_cast<ImTextureID>(mainTexture), availableSceneWindowSize, g_imvec2UnitY, g_imvec2UnitX);
             }
             ImGui::PopStyleVar();
             ImGui::End();
@@ -566,9 +710,14 @@ auto main() -> int32_t {
         }
 
         ImGui::Render();
-        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-
-        PopDebugGroup();
+        auto* drawData = ImGui::GetDrawData();
+        if (drawData != nullptr) {
+            glDisable(GL_FRAMEBUFFER_SRGB);
+            isSrgbDisabled = true;
+            PushDebugGroup("UI");
+            ImGui_ImplOpenGL3_RenderDrawData(drawData);
+            PopDebugGroup();            
+        }
 
         glfwSwapBuffers(g_window);
         glfwPollEvents();        

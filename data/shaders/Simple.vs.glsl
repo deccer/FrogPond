@@ -8,8 +8,15 @@ layout (location = 0) out vec4 v_color;
 
 layout (location = 0) uniform CameraInformation
 {
+    mat4 old_projection_matrix;
+    mat4 old_view_matrix;
+    mat4 old_view_projection_matrix;
     mat4 projection_matrix;
     mat4 view_matrix;
+    mat4 view_projection_matrix;
+    vec4 camera_position;
+    vec4 frustum_planes[6];
+    vec4 viewport;
 } u_camera_information;
 
 struct vec2_packed_t
