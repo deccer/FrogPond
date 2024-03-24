@@ -22,6 +22,7 @@
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
+#include "implot.h"
 
 enum class EWindowStyle {
     Windowed,
@@ -39,6 +40,7 @@ struct SWindowSettings {
 
 GLFWwindow* g_window = nullptr;
 ImGuiContext* g_imguiContext = nullptr;
+ImPlotContext* g_implotContext = nullptr;
 glm::ivec2 g_framebufferSize = glm::ivec2{0, 0};
 glm::ivec2 g_sceneViewerSize = glm::ivec2{0, 0};
 bool g_framebufferResized = true;
@@ -46,8 +48,6 @@ bool g_sceneViewerResized = false;
 bool g_isEditor = false;
 
 uint32_t g_defaultInputLayout = 0;
-uint32_t g_vertexPositionColorInputLayout = 0;
-uint32_t g_vertexPositionUvInputLayout = 0;
 uint32_t g_fullscreenTrianglePipeline = 0;
 uint32_t g_samplerNearestNearestClampToEdge = 0;
 
@@ -70,7 +70,7 @@ struct SObject {
     glm::mat4x4 WorldMatrix;
 };
 
-static auto ReadTextFromFile(const std::string_view filePath) -> std::string {
+auto ReadTextFromFile(const std::string_view filePath) -> std::string {
 
     std::ifstream file(filePath.data(), std::ios::ate);
     std::string result(file.tellg(), '\0');
@@ -85,6 +85,14 @@ auto SetDebugLabel(
     const std::string_view label) -> void {
 
     glObjectLabel(objectType, object, static_cast<GLsizei>(label.size()), label.data());
+}
+
+auto inline PushDebugGroup(const std::string_view label) -> void {
+    glPushDebugGroup(GL_DEBUG_SOURCE_APPLICATION, 0, label.size(), label.data());
+}
+
+auto inline PopDebugGroup() -> void {
+    glPopDebugGroup();
 }
 
 auto CreateProgram(
@@ -198,7 +206,7 @@ auto OnOpenGLDebugMessage(
     }
 }
 
-auto static CreateFullscreenTriangleProgramPipeline() -> uint32_t
+auto CreateFullscreenTriangleProgramPipeline() -> uint32_t
 {
     auto fullscreenTrianglePipelineResult = CreateProgramPipeline("FST", "data/shaders/FST.vs.glsl", "data/shaders/FST.fs.glsl");
     if (!fullscreenTrianglePipelineResult) {
@@ -208,11 +216,11 @@ auto static CreateFullscreenTriangleProgramPipeline() -> uint32_t
     return *fullscreenTrianglePipelineResult;
 }
 
-auto static CreateTextureSampler() -> uint32_t {
+auto CreateTextureSampler() -> uint32_t {
     uint32_t sampler = 0;
     glCreateSamplers(1, &sampler);
-    glSamplerParameteri(sampler, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glSamplerParameteri(sampler, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glSamplerParameteri(sampler, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glSamplerParameteri(sampler, GL_TEXTURE_WRAP_T, GL_REPEAT);
     glSamplerParameteri(sampler, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glSamplerParameteri(sampler, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glSamplerParameterf(sampler, GL_TEXTURE_LOD_BIAS, 0.0f);
@@ -226,12 +234,11 @@ auto DrawFullscreenTriangle(uint32_t texture) -> void {
     glBindProgramPipeline(g_fullscreenTrianglePipeline);
     glBindTextureUnit(0, texture);
     glBindSampler(0, g_samplerNearestNearestClampToEdge);
-    glBindVertexArray(g_defaultInputLayout);
     glDrawArrays(GL_TRIANGLES, 0, 3);
 }
 
-auto main() -> int32_t
-{
+auto main() -> int32_t {
+
     SWindowSettings windowSettings = {
         .ResolutionWidth = 1680,
         .ResolutionHeight = 720,
@@ -305,7 +312,8 @@ auto main() -> int32_t
         glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
     }
 
-    auto g_imguiContext = ImGui::CreateContext();
+    g_imguiContext = ImGui::CreateContext();
+    g_implotContext = ImPlot::CreateContext();
     auto& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_IsSRGB;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
@@ -322,7 +330,7 @@ auto main() -> int32_t
         return -6;
     }
 
-    glfwSwapInterval(1);
+    glfwSwapInterval(0);
 
     glEnable(GL_FRAMEBUFFER_SRGB);
     glEnable(GL_CULL_FACE);
@@ -330,17 +338,6 @@ auto main() -> int32_t
     glFrontFace(GL_CCW);
 
     glViewport(0, 0, g_framebufferSize.x, g_framebufferSize.y);
-
-    glCreateVertexArrays(1, &g_vertexPositionColorInputLayout);
-    SetDebugLabel(g_vertexPositionColorInputLayout, GL_VERTEX_ARRAY, "InputLayout_VertexPositionColor");
-
-    glVertexArrayAttribFormat(g_vertexPositionColorInputLayout, 0, 3, GL_FLOAT, false, offsetof(SVertexPositionColor, Position));
-    glVertexArrayAttribBinding(g_vertexPositionColorInputLayout, 0, 0);
-    glEnableVertexArrayAttrib(g_vertexPositionColorInputLayout, 0);
-
-    glVertexArrayAttribFormat(g_vertexPositionColorInputLayout, 1, 4, GL_FLOAT, false, offsetof(SVertexPositionColor, Color));
-    glVertexArrayAttribBinding(g_vertexPositionColorInputLayout, 1, 0);
-    glEnableVertexArrayAttrib(g_vertexPositionColorInputLayout, 1);
 
     std::vector<SVertexPositionColor> vertices = {
         SVertexPositionColor{{+0.0f, +0.5f, +0.0f}, {0.6f, 0.1f, 0.8f, 1.0f}},
@@ -421,10 +418,7 @@ auto main() -> int32_t
     g_samplerNearestNearestClampToEdge = CreateTextureSampler();
     glCreateVertexArrays(1, &g_defaultInputLayout);
     SetDebugLabel(g_defaultInputLayout, GL_VERTEX_ARRAY, "InputLayout_Empty");
-
-    auto lastProgramPipeline = 0;
-    auto lastFramebuffer = 0;
-    auto lastInputLayout = 0;
+    glBindVertexArray(g_defaultInputLayout);
 
     auto isSrgbDisabled = false;
     auto isCullfaceDisabled = false;
@@ -432,10 +426,12 @@ auto main() -> int32_t
     g_sceneViewerSize = g_framebufferSize;
 
     auto previousTimeInSeconds = glfwGetTime();
+    auto accumulatedTimeInSeconds = 0.0;
     while (!glfwWindowShouldClose(g_window)) {
 
         auto currentTimeInSeconds = glfwGetTime();
         auto deltaTimeInSeconds = currentTimeInSeconds - previousTimeInSeconds;
+        accumulatedTimeInSeconds += deltaTimeInSeconds;
         previousTimeInSeconds = currentTimeInSeconds;
 
         auto framebufferWasResized = false;
@@ -455,6 +451,7 @@ auto main() -> int32_t
             }
         } else {
             auto framebufferSizeScaled = glm::vec2(g_framebufferSize) * windowSettings.ResolutionScale;
+            //glViewport(0, 0, framebufferSizeScaled.x, framebufferSizeScaled.y);
             glViewport(0, 0, framebufferSizeScaled.x, framebufferSizeScaled.y);
             if (g_framebufferResized) {
                 glDeleteTextures(1, &mainTexture);
@@ -473,21 +470,29 @@ auto main() -> int32_t
             isSrgbDisabled = false;
         }
 
-        if (g_isEditor) {
-            glClearNamedFramebufferfv(mainFramebuffer, GL_COLOR, 0, glm::value_ptr(glm::convertLinearToSRGB(glm::vec4{0.6f, 0.1f, 0.8f, 1.0f})));
-        } else {
-            glClearNamedFramebufferfv(mainFramebuffer, GL_COLOR, 0, glm::value_ptr(glm::convertSRGBToLinear(glm::vec4{0.6f, 0.1f, 0.8f, 1.0f})));
-        }
+        // Depth Pre Pass
+
+
+        // GBuffer Pass
+
+        PushDebugGroup("SimplePipeline");
+        glClearNamedFramebufferfv(mainFramebuffer, GL_COLOR, 0, glm::value_ptr(glm::vec4{0.4f, 0.1f, 0.6f, 1.0f}));
 
         glBindProgramPipeline(simpleProgramPipeline);
         glBindFramebuffer(GL_FRAMEBUFFER, mainFramebuffer);
-        glBindVertexArray(g_vertexPositionColorInputLayout);
-        glVertexArrayVertexBuffer(g_vertexPositionColorInputLayout, 0, vertexBuffer, 0, sizeof(SVertexPositionColor));
-        glVertexArrayElementBuffer(g_vertexPositionColorInputLayout, indexBuffer);
+
+        glVertexArrayElementBuffer(g_defaultInputLayout, indexBuffer);
 
         glBindBufferBase(GL_UNIFORM_BUFFER, 0, cameraInformationBuffer);
-        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, objectBuffer);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, vertexBuffer);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, objectBuffer);
         glDrawElementsInstanced(GL_TRIANGLES, indices.size(), GL_UNSIGNED_INT, nullptr, objects.size());
+
+        PopDebugGroup();
+
+        // UI Pass
+
+        PushDebugGroup("UI");
 
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);        
@@ -519,7 +524,7 @@ auto main() -> int32_t
 
         if (ImGui::Begin("Debug")) {
             auto resolutionScale = windowSettings.ResolutionScale;
-            if (ImGui::SliderFloat("Resolution Scale", &resolutionScale, 0.1f, 3.0f))
+            if (ImGui::SliderFloat("Resolution Scale", &resolutionScale, 0.01f, 2.0f))
             {
                 windowSettings.ResolutionScale = resolutionScale;
                 if (g_isEditor) {
@@ -548,7 +553,11 @@ auto main() -> int32_t
             ImGui::PopStyleVar();
             ImGui::End();
         } else {
+
+            PushDebugGroup("Blit To UI");
+            glViewport(0, 0, g_framebufferSize.x, g_framebufferSize.y);
             DrawFullscreenTriangle(mainTexture);
+            PopDebugGroup();
 /*
             glBlitNamedFramebuffer(mainFramebuffer, 0,
                                    0, 0, g_framebufferSize.x, g_framebufferSize.y,
@@ -558,6 +567,8 @@ auto main() -> int32_t
 
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+        PopDebugGroup();
 
         glfwSwapBuffers(g_window);
         glfwPollEvents();        
@@ -571,18 +582,21 @@ auto main() -> int32_t
     glDeleteBuffers(1, &indexBuffer);
     glDeleteBuffers(1, &objectBuffer);
 
-    glDeleteVertexArrays(1, &g_vertexPositionColorInputLayout);
     glDeleteVertexArrays(1, &g_defaultInputLayout);
 
     glDeleteProgramPipelines(1, &simpleProgramPipeline);
     glDeleteProgramPipelines(1, &g_fullscreenTrianglePipeline);
+
+    if (g_implotContext != nullptr) {
+        ImPlot::DestroyContext(g_implotContext);
+    }
 
     if (g_imguiContext != nullptr) {
         ImGui_ImplOpenGL3_Shutdown();
         ImGui_ImplGlfw_Shutdown();
         ImGui::DestroyContext(g_imguiContext);
     }
-
+    
     glfwDestroyWindow(g_window);
     glfwTerminate();
     return 0;
