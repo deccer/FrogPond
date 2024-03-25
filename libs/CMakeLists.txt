@@ -18,6 +18,7 @@ target_compile_definitions(glm INTERFACE
     GLM_FORCE_AVX2
     GLM_FORCE_RADIANS
     GLM_FORCE_DEPTH_ZERO_TO_ONE
+    GLM_FORCE_SILENT_WARNINGS
 )
 
 #- SPDLOG --------------------------------------------------------------------------------------------------------------
@@ -73,6 +74,7 @@ FetchContent_Declare(
 
 FetchContent_GetProperties(implot)
 if(NOT implot_POPULATED)
+    message("Fetching implot")
     FetchContent_Populate(implot)
 
     add_library(implot
@@ -88,3 +90,51 @@ if(NOT implot_POPULATED)
 endif()
 
 set(IMPLOT_SOURCE ${implot_SOURCE_DIR} PARENT_SCOPE)
+
+#- fastgltf ------------------------------------------------------------------------------------------------------------
+
+FetchContent_Declare(
+    fastgltf
+    GIT_REPOSITORY https://github.com/spnda/fastgltf.git
+    GIT_TAG        v0.7.1
+)
+
+message("Fetching fastgltf")
+FetchContent_MakeAvailable(fastgltf)
+
+#- MeshOptimizer -------------------------------------------------------------------------------------------------------
+
+FetchContent_Declare(
+    meshoptimizer
+    GIT_REPOSITORY https://github.com/zeux/meshoptimizer.git
+    GIT_TAG        v0.19
+)
+message("Fetching meshoptimizer")
+FetchContent_MakeAvailable(meshoptimizer)
+
+#- Ktx -----------------------------------------------------------------------------------------------------------------
+
+option(KTX_FEATURE_TESTS "" OFF)
+option(KTX_FEATURE_VULKAN "" OFF)
+option(KTX_FEATURE_GL_UPLOAD "" OFF)
+option(KTX_FEATURE_VK_UPLOAD "" OFF)
+option(KTX_FEATURE_WRITE "" OFF)
+option(KTX_FEATURE_TOOLS "" OFF)
+option(KTX_FEATURE_STATIC_LIBRARY "" ON)
+FetchContent_Declare(
+    ktx
+    GIT_REPOSITORY https://github.com/KhronosGroup/KTX-Software.git
+    GIT_TAG        v4.3.2
+)
+
+message("Fetching ktx")
+FetchContent_MakeAvailable(ktx)
+message($CXX_COMPILER_ID)
+target_compile_options(ktx
+    PRIVATE
+    $<$<OR:$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>>:
+    -Wno-everything>
+    $<$<CXX_COMPILER_ID:MSVC>:
+    -w>
+)
+
