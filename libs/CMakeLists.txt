@@ -129,7 +129,6 @@ FetchContent_Declare(
 
 message("Fetching ktx")
 FetchContent_MakeAvailable(ktx)
-message($CXX_COMPILER_ID)
 target_compile_options(ktx
     PRIVATE
     $<$<OR:$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>>:
