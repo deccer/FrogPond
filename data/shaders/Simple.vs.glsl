@@ -4,7 +4,8 @@ layout (location = 0) out gl_PerVertex
 {
     vec4 gl_Position;
 };
-layout (location = 0) out vec4 v_color;
+layout (location = 0) out vec3 v_normal;
+layout (location = 1) out vec2 v_uv;
 
 layout (location = 0) uniform CameraInformation
 {
@@ -73,7 +74,8 @@ vec4_packed_t Vec4ToPacked(in vec4 v)
 struct vertex_t
 {
     vec3_packed_t position;
-    vec4_packed_t color;
+    vec3_packed_t normal;
+    vec2_packed_t uv;
 };
 
 layout(std430, binding = 1) restrict readonly buffer VertexBuffer
@@ -94,9 +96,10 @@ layout (binding = 2) buffer ObjectsBuffer
 void main()
 {
     vertex_t vertex = Vertices[gl_VertexID];
-    object_t object = Objects[gl_InstanceID];
+    object_t object = Objects[gl_DrawID];
 
-    v_color = PackedToVec4(vertex.color);
+    v_normal = PackedToVec3(vertex.normal);
+    v_uv = PackedToVec2(vertex.uv);
     gl_Position = u_camera_information.projection_matrix *
                   u_camera_information.view_matrix *
                   object.world_matrix * 

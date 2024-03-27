@@ -23,11 +23,18 @@
 #include <memory>
 #include <utility>
 #include <span>
+#include <tuple>
+#include <stack>
 
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
 #include "implot.h"
+
+#include <fastgltf/glm_element_traits.hpp>
+#include <fastgltf/core.hpp>
+#include <fastgltf/tools.hpp>
+#include <fastgltf/types.hpp>
 
 enum class EWindowStyle {
     Windowed,
@@ -45,6 +52,12 @@ struct SWindowSettings {
 
 struct SVertexPositionUv {
     glm::vec3 Position;
+    glm::vec2 Uv;
+};
+
+struct SVertexPositionNormalUv {
+    glm::vec3 Position;
+    glm::vec3 Normal;
     glm::vec2 Uv;
 };
 
@@ -67,6 +80,21 @@ struct SGlobalUniforms {
 
 struct SObject {
     glm::mat4x4 WorldMatrix;
+};
+
+struct SMesh {
+    size_t VertexCount;
+    size_t VertexOffset;
+    size_t IndexCount;
+    size_t IndexOffset;
+};
+
+struct SDrawElementCommand {
+    uint32_t IndexCount;
+    uint32_t InstanceCount;
+    uint32_t FirstIndex;
+    int32_t BaseVertex;
+    uint32_t BaseInstance;
 };
 
 struct SCamera {
@@ -110,6 +138,9 @@ float g_cameraSpeed = 4.0f;
 
 bool g_cursorIsActive = true;
 bool g_cursorJustEntered = false;
+
+uint32_t g_lastVertexOffset = 0;
+uint32_t g_lastIndexOffset = 0;
 
 auto inline ReadTextFromFile(const std::filesystem::path& filePath) -> std::string {
 
@@ -374,11 +405,206 @@ auto inline CreateBuffer(
     return buffer;
 }
 
+auto NodeToMatrix4x4(const fastgltf::Node& node) -> glm::mat4 {
+
+    glm::mat4 transform{1.0};
+
+    if (auto* trs = std::get_if<fastgltf::TRS>(&node.transform))
+    {
+        auto rotation = glm::quat{trs->rotation[3], trs->rotation[0], trs->rotation[1], trs->rotation[2]};
+        auto scale = glm::vec3{trs->scale[0], trs->scale[1], trs->scale[2]};
+        auto translation = glm::vec3{trs->translation[0], trs->translation[1], trs->translation[2]};
+
+        glm::mat4 rotationMatrix = glm::mat4_cast(rotation);
+
+        // T * R * S
+        transform = glm::scale(glm::translate(glm::mat4(1.0f), translation) * rotationMatrix, scale);
+    }
+    else if (auto* mat = std::get_if<fastgltf::Node::TransformMatrix>(&node.transform))
+    {
+        const auto& m = *mat;
+        // clang-format off
+        transform =
+        { 
+            m[0], m[1], m[2], m[3], 
+            m[4], m[5], m[6], m[7], 
+            m[8], m[9], m[10], m[11], 
+            m[12], m[13], m[14], m[15],
+        };
+        // clang-format on
+    }
+
+    return transform;
+}
+
+auto GetVertices(
+    const fastgltf::Asset& model, 
+    const fastgltf::Primitive& primitive) -> std::vector<SVertexPositionNormalUv> {
+
+    std::vector<glm::vec3> positions;
+    auto& positionAccessor = model.accessors[primitive.findAttribute("POSITION")->second];
+    positions.resize(positionAccessor.count);
+    fastgltf::iterateAccessorWithIndex<glm::vec3>(model,
+                                                  positionAccessor,
+                                                  [&](glm::vec3 position, std::size_t index) { positions[index] = position; });
+
+    std::vector<glm::vec3> normals;
+    auto& normalAccessor = model.accessors[primitive.findAttribute("NORMAL")->second];
+    normals.resize(normalAccessor.count);
+    fastgltf::iterateAccessorWithIndex<glm::vec3>(model,
+                                                  normalAccessor,
+                                                  [&](glm::vec3 normal, std::size_t index) { normals[index] = normal; });
+
+    std::vector<glm::vec2> uvs;
+    if (primitive.findAttribute("TEXCOORD_0") != primitive.attributes.end())
+    {
+        auto& uvAccessor = model.accessors[primitive.findAttribute("TEXCOORD_0")->second];
+        uvs.resize(uvAccessor.count);
+        fastgltf::iterateAccessorWithIndex<glm::vec2>(model,
+                                                    uvAccessor,
+                                                    [&](glm::vec2 uv, std::size_t index)
+                                                    { uvs[index] = uv; });
+    }
+    else
+    {
+        uvs.resize(positions.size(), {});
+    }
+
+    std::vector<SVertexPositionNormalUv> vertices;
+    vertices.resize(positions.size());
+
+    for (size_t i = 0; i < positions.size(); i++)
+    {
+        vertices[i] = 
+        {
+            positions[i],
+            normals[i],
+            uvs[i]
+        };
+    }
+
+    return vertices;
+}
+
+auto GetIndices(
+    const fastgltf::Asset& model,
+    const fastgltf::Primitive& primitive) -> std::vector<uint32_t> {
+
+    auto indices = std::vector<uint32_t>();
+    auto& accessor = model.accessors[primitive.indicesAccessor.value()];
+    indices.resize(accessor.count);
+    fastgltf::iterateAccessorWithIndex<uint32_t>(model, accessor, [&](uint32_t value, size_t index)
+    {
+        indices[index] = value;
+    });
+    return indices;
+}
+
+auto AddModelFromFile(
+    const std::string& modelName,
+    std::filesystem::path filePath,
+    const uint32_t megaVertexBuffer,
+    const uint32_t megaIndexBuffer,
+    std::unordered_map<std::string, std::vector<std::string>>& modelToPrimitiveMap,
+    std::unordered_map<std::string, SMesh>& primitiveToMeshMap,
+    std::unordered_map<std::string, glm::mat4x4>& primitiveToInitialTransformMap) -> void {
+
+    if (modelToPrimitiveMap.contains(modelName))
+    {
+        return;
+    }
+
+    auto& meshNames = modelToPrimitiveMap[modelName];
+
+    fastgltf::Parser parser(fastgltf::Extensions::KHR_mesh_quantization);
+
+    auto path = std::filesystem::path{filePath};
+
+    constexpr auto gltfOptions =
+        fastgltf::Options::DontRequireValidAssetMember |
+        fastgltf::Options::AllowDouble |
+        fastgltf::Options::LoadGLBBuffers |
+        fastgltf::Options::LoadExternalBuffers |
+        fastgltf::Options::LoadExternalImages;
+
+    fastgltf::GltfDataBuffer data;
+    data.loadFromFile(path);
+
+    auto assetResult = parser.loadGltf(&data, path.parent_path(), gltfOptions);
+    if (assetResult.error() != fastgltf::Error::None)
+    {
+        spdlog::error("fastgltf: Failed to load glTF: {}", fastgltf::getErrorMessage(assetResult.error()));
+        return;
+    }
+
+    auto& asset = assetResult.get();
+
+    std::stack<std::pair<const fastgltf::Node*, glm::mat4>> nodeStack;
+    glm::mat4 rootTransform = glm::mat4(1.0f);
+
+    for (auto nodeIndex : asset.scenes[0].nodeIndices)
+    {
+        nodeStack.emplace(&asset.nodes[nodeIndex], rootTransform);
+    }
+    
+    while (!nodeStack.empty())
+    {
+        decltype(nodeStack)::value_type top = nodeStack.top();
+        const auto& [node, parentGlobalTransform] = top;
+        nodeStack.pop();
+
+        glm::mat4 localTransform = NodeToMatrix4x4(*node);
+        glm::mat4 globalTransform = parentGlobalTransform * localTransform;
+
+        for (auto childNodeIndex : node->children)
+        {
+            nodeStack.emplace(&asset.nodes[childNodeIndex], globalTransform);
+        }
+
+        if (node->meshIndex.has_value())
+        {
+            for (const fastgltf::Mesh& fgMesh = asset.meshes[node->meshIndex.value()];
+                 const auto& primitive : fgMesh.primitives)
+            {
+                if (primitiveToMeshMap.contains(fgMesh.name.data()))
+                {
+                    continue;
+                }
+
+                meshNames.emplace_back(fgMesh.name);
+
+                auto vertices = GetVertices(asset, primitive);
+                auto indices = GetIndices(asset, primitive);
+
+                SMesh mesh = {
+                    .VertexCount = vertices.size(),
+                    .VertexOffset = g_lastVertexOffset,
+                    .IndexCount = indices.size(),
+                    .IndexOffset = g_lastIndexOffset
+                };
+
+                primitiveToMeshMap.emplace(fgMesh.name, mesh);
+
+                auto verticesSizeInBytes = sizeof(SVertexPositionNormalUv) * vertices.size();
+                auto indicesSizeInBytes = sizeof(uint32_t) * indices.size();
+
+                glNamedBufferSubData(megaVertexBuffer, g_lastVertexOffset * sizeof(SVertexPositionNormalUv), verticesSizeInBytes, vertices.data());
+                glNamedBufferSubData(megaIndexBuffer, g_lastIndexOffset * sizeof(uint32_t), indicesSizeInBytes, indices.data());
+
+                g_lastVertexOffset += vertices.size();
+                g_lastIndexOffset += indices.size();
+
+                primitiveToInitialTransformMap.emplace(fgMesh.name, globalTransform);
+            }
+        }
+    }
+}
+
 auto main() -> int32_t {
 
     SWindowSettings windowSettings = {
-        .ResolutionWidth = 1680,
-        .ResolutionHeight = 720,
+        .ResolutionWidth = 1920,
+        .ResolutionHeight = 1080,
         .ResolutionScale = 1.0f,
         .WindowStyle = EWindowStyle::Windowed,
         .IsDebug = true
@@ -478,6 +704,8 @@ auto main() -> int32_t {
     glEnable(GL_CULL_FACE);
     glCullFace(GL_BACK);
     glFrontFace(GL_CCW);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
 
     glViewport(0, 0, g_framebufferSize.x, g_framebufferSize.y);
 
@@ -514,24 +742,21 @@ auto main() -> int32_t {
         return glm::translate(glm::mat4x4(1.0f), glm::vec3(x, y, z));
     };
 
-    std::vector<SObject> objects = {
-        {.WorldMatrix = CreateWorldMatrix(-2.0f, -2.0f, 0.0f)},
-        {.WorldMatrix = CreateWorldMatrix(+2.0f, -2.0f, 0.0f)},
-        {.WorldMatrix = CreateWorldMatrix(-2.0f, +2.0f, 0.0f)},
-        {.WorldMatrix = CreateWorldMatrix(+2.0f, +2.0f, 0.0f)},
-    };
-
-    auto objectBuffer = CreateBuffer("Objects", sizeof(SObject) * objects.size(), objects.data(), GL_DYNAMIC_DRAW);
-
     uint32_t mainTexture = 0;
     glCreateTextures(GL_TEXTURE_2D, 1, &mainTexture);
     SetDebugLabel(mainTexture, GL_TEXTURE, std::format("MainTexture_{}x{}", g_framebufferSize.x, g_framebufferSize.y));
     glTextureStorage2D(mainTexture, 1, GL_RGBA8, g_framebufferSize.x, g_framebufferSize.y);
 
+    uint32_t mainDepthTexture = 0;
+    glCreateTextures(GL_TEXTURE_2D, 1, &mainDepthTexture);
+    SetDebugLabel(mainDepthTexture, GL_TEXTURE, std::format("MainDepthTexture_{}x{}", g_framebufferSize.x, g_framebufferSize.y));
+    glTextureStorage2D(mainDepthTexture, 1, GL_DEPTH32F_STENCIL8, g_framebufferSize.x, g_framebufferSize.y);
+
     uint32_t mainFramebuffer = 0;
     glCreateFramebuffers(1, &mainFramebuffer);
     SetDebugLabel(mainTexture, GL_FRAMEBUFFER, "MainFramebuffer");    
     glNamedFramebufferTexture(mainFramebuffer, GL_COLOR_ATTACHMENT0, mainTexture, 0);
+    glNamedFramebufferTexture(mainFramebuffer, GL_DEPTH_ATTACHMENT, mainDepthTexture, 0);
 
     auto mainFramebufferStatus = glCheckNamedFramebufferStatus(mainFramebuffer, GL_FRAMEBUFFER);
     if (mainFramebufferStatus != GL_FRAMEBUFFER_COMPLETE) {
@@ -546,6 +771,66 @@ auto main() -> int32_t {
     glCreateVertexArrays(1, &g_defaultInputLayout);
     SetDebugLabel(g_defaultInputLayout, GL_VERTEX_ARRAY, "InputLayout_Empty");
     glBindVertexArray(g_defaultInputLayout);
+
+    uint32_t megaVertexBuffer = 0;
+    glCreateBuffers(1, &megaVertexBuffer);
+    glNamedBufferStorage(megaVertexBuffer, 1000000000, nullptr, GL_DYNAMIC_STORAGE_BIT);
+
+    uint32_t megaIndexBuffer = 0;
+    glCreateBuffers(1, &megaIndexBuffer);
+    glNamedBufferStorage(megaIndexBuffer, 768000000, nullptr, GL_DYNAMIC_STORAGE_BIT);
+
+    uint32_t objectBuffer = 0;
+    glCreateBuffers(1, &objectBuffer);
+    glNamedBufferStorage(objectBuffer, sizeof(SObject) * 16384, nullptr, GL_DYNAMIC_STORAGE_BIT);
+
+    uint32_t objectIndirectBuffer = 0;
+    glCreateBuffers(1, &objectIndirectBuffer);
+    glNamedBufferStorage(objectIndirectBuffer, sizeof(SDrawElementCommand) * 16384, nullptr, GL_DYNAMIC_STORAGE_BIT);    
+
+    std::unordered_map<std::string, std::vector<std::string>> modelToPrimitiveMap;
+    std::unordered_map<std::string, SMesh> primitiveToMeshMap;
+    std::unordered_map<std::string, glm::mat4x4> primitiveToInitialTransformMap;
+
+    AddModelFromFile(
+        "SM_Complex",
+        "data/default/SM_Deccer_Cubes_Textured_Complex.gltf",
+        megaVertexBuffer,
+        megaIndexBuffer,
+        modelToPrimitiveMap,
+        primitiveToMeshMap,
+        primitiveToInitialTransformMap);
+    AddModelFromFile(
+        "SM_Complex_Embedded",
+        "data/default/SM_Deccer_Cubes_Textured_Embedded.gltf",
+        megaVertexBuffer,
+        megaIndexBuffer,
+        modelToPrimitiveMap,
+        primitiveToMeshMap,
+        primitiveToInitialTransformMap);
+
+    auto& meshNames = modelToPrimitiveMap["SM_Complex"];
+
+    for (auto meshIndex = 0; auto& meshName : meshNames) {
+        auto& mesh = primitiveToMeshMap[meshName];
+        auto& transform = primitiveToInitialTransformMap[meshName];
+
+        SObject object = {
+            .WorldMatrix = transform
+        };
+        glNamedBufferSubData(objectBuffer, sizeof(SObject) * meshIndex, sizeof(SObject), &object);
+
+        SDrawElementCommand drawElementCommand = {
+            .IndexCount = mesh.IndexCount,
+            .InstanceCount = 1,
+            .FirstIndex = mesh.IndexOffset,
+            .BaseVertex = mesh.VertexOffset,
+            .BaseInstance = 0
+        };
+        glNamedBufferSubData(objectIndirectBuffer, sizeof(SDrawElementCommand) * meshIndex, sizeof(SDrawElementCommand), &drawElementCommand);
+
+        meshIndex++;
+    }    
 
     auto isSrgbDisabled = false;
     auto isCullfaceDisabled = false;
@@ -563,7 +848,7 @@ auto main() -> int32_t {
 
         HandleCamera(deltaTimeInSeconds);
         globalUniforms = {
-            .ProjectionMatrix = glm::perspectiveFovRH_ZO(glm::radians(60.0f), (float)g_framebufferSize.x, (float)g_framebufferSize.x, 0.1f, 1024.0f),
+            .ProjectionMatrix = glm::perspectiveFovRH_ZO(glm::radians(60.0f), (float)g_framebufferSize.x, (float)g_framebufferSize.y, 0.1f, 1024.0f),
             .ViewMatrix = g_mainCamera.GetViewMatrix(),
             .CameraPosition = glm::vec4(g_mainCamera.Position, 0.0f)
         };
@@ -580,21 +865,35 @@ auto main() -> int32_t {
                 glCreateTextures(GL_TEXTURE_2D, 1, &mainTexture);
                 SetDebugLabel(mainTexture, GL_TEXTURE, std::format("MainTexture_{}x{}", sceneViewerSizeScaled.x, sceneViewerSizeScaled.y));
                 glTextureStorage2D(mainTexture, 1, GL_SRGB8, sceneViewerSizeScaled.x, sceneViewerSizeScaled.y);            
+
+                glDeleteTextures(1, &mainDepthTexture);
+                glCreateTextures(GL_TEXTURE_2D, 1, &mainDepthTexture);
+                SetDebugLabel(mainDepthTexture, GL_TEXTURE, std::format("MainDepthTexture_{}x{}", sceneViewerSizeScaled.x, sceneViewerSizeScaled.y));
+                glTextureStorage2D(mainDepthTexture, 1, GL_DEPTH32F_STENCIL8, sceneViewerSizeScaled.x, sceneViewerSizeScaled.y);
+
                 glNamedFramebufferTexture(mainFramebuffer, GL_COLOR_ATTACHMENT0, mainTexture, 0);
+                glNamedFramebufferTexture(mainFramebuffer, GL_DEPTH_ATTACHMENT, mainDepthTexture, 0);
 
                 g_sceneViewerResized = false;
                 framebufferWasResized = true;                
             }
         } else {
             auto framebufferSizeScaled = glm::vec2(g_framebufferSize) * windowSettings.ResolutionScale;
-            //glViewport(0, 0, framebufferSizeScaled.x, framebufferSizeScaled.y);
             glViewport(0, 0, framebufferSizeScaled.x, framebufferSizeScaled.y);
             if (g_framebufferResized) {
+
                 glDeleteTextures(1, &mainTexture);
                 glCreateTextures(GL_TEXTURE_2D, 1, &mainTexture);
                 SetDebugLabel(mainTexture, GL_TEXTURE, std::format("MainTexture_{}x{}", framebufferSizeScaled.x, framebufferSizeScaled.y));
                 glTextureStorage2D(mainTexture, 1, GL_SRGB8, framebufferSizeScaled.x, framebufferSizeScaled.y);            
+
+                glDeleteTextures(1, &mainDepthTexture);
+                glCreateTextures(GL_TEXTURE_2D, 1, &mainDepthTexture);
+                SetDebugLabel(mainDepthTexture, GL_TEXTURE, std::format("MainDepthTexture_{}x{}", framebufferSizeScaled.x, framebufferSizeScaled.y));
+                glTextureStorage2D(mainDepthTexture, 1, GL_DEPTH_COMPONENT32F, framebufferSizeScaled.x, framebufferSizeScaled.y);
+
                 glNamedFramebufferTexture(mainFramebuffer, GL_COLOR_ATTACHMENT0, mainTexture, 0);
+                glNamedFramebufferTexture(mainFramebuffer, GL_DEPTH_ATTACHMENT, mainDepthTexture, 0);                
 
                 g_framebufferResized = false;
                 framebufferWasResized = true;
@@ -612,17 +911,24 @@ auto main() -> int32_t {
         // GBuffer Pass
 
         PushDebugGroup("SimplePipeline");
+        auto clearDepth = 1.0f;
         glClearNamedFramebufferfv(mainFramebuffer, GL_COLOR, 0, glm::value_ptr(glm::vec4{0.4f, 0.1f, 0.6f, 1.0f}));
+        glClearNamedFramebufferfv(mainFramebuffer, GL_DEPTH, 0, &clearDepth);
 
         glBindProgramPipeline(simpleProgramPipeline);
         glBindFramebuffer(GL_FRAMEBUFFER, mainFramebuffer);
 
-        glVertexArrayElementBuffer(g_defaultInputLayout, indexBuffer);
+        //glVertexArrayElementBuffer(g_defaultInputLayout, indexBuffer);
+        glVertexArrayElementBuffer(g_defaultInputLayout, megaIndexBuffer);
 
         glBindBufferBase(GL_UNIFORM_BUFFER, 0, globalUniformsBuffer);
-        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, vertexBuffer);
+        //glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, vertexBuffer);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, megaVertexBuffer);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, objectBuffer);
-        glDrawElementsInstanced(GL_TRIANGLES, indices.size(), GL_UNSIGNED_INT, nullptr, objects.size());
+        //glDrawElementsInstanced(GL_TRIANGLES, indices.size(), GL_UNSIGNED_INT, nullptr, objects.size());
+
+        glBindBuffer(GL_DRAW_INDIRECT_BUFFER, objectIndirectBuffer);
+        glMultiDrawElementsIndirect(GL_TRIANGLES, GL_UNSIGNED_INT, nullptr, meshNames.size(), sizeof(SDrawElementCommand));
 
         PopDebugGroup();
 
@@ -667,19 +973,6 @@ auto main() -> int32_t {
                     g_framebufferResized = true;
                 }
             }
-            auto position = g_mainCamera.Position;
-            auto direction = g_mainCamera.GetForwardDirection();
-            ImGui::Text("Camera Pos %f %f %f", position.x, position.y, position.z);
-            ImGui::Text("Camera Dir %f %f %f", direction.x, direction.y, direction.z);
-
-            ImGui::Separator();
-            ImGui::Text("Cursor entered  %b", g_cursorJustEntered ? true : false);
-            ImGui::Text("Cursor active  %b", g_cursorIsActive ? true : false);
-            ImGui::Text("Cursor Sens  %.3f", g_cursorSensitivity);
-            ImGui::Text("Cursor Pos  %.3f %.3f", g_cursorPosition.x, g_cursorPosition.y);
-            ImGui::Text("Cursor PosF %.3f %.3f", g_cursorFrameOffset.x, g_cursorFrameOffset.y);
-            ImGui::Text("Pitch %.3f", g_mainCamera.Pitch);
-            ImGui::Text("Yar %.3f", g_mainCamera.Yaw);
         }
         ImGui::End();
 
