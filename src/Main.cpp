@@ -1434,9 +1434,21 @@ auto main() -> int32_t {
     }
 
     glDeleteSamplers(1, &g_fullscreenSamplerNearestNearestClampToEdge);
+    for(auto sampler : g_samplers) {
+        glDeleteSamplers(1, &sampler);
+    }
+    for (auto textureHandle : g_textureHandles) {
+        if (glIsTextureHandleResidentARB(textureHandle)) {
+            glMakeTextureHandleNonResidentARB(textureHandle);
+        }
+    }
+    for (auto texture : g_textures) {
+        glDeleteTextures(1, &texture);
+    }
     glDeleteTextures(1, &mainAlbedoTexture);
     glDeleteTextures(1, &mainDepthTexture);
     glDeleteTextures(1, &mainNormalTexture);
+
     glDeleteFramebuffers(1, &mainFramebuffer);
 
     glDeleteBuffers(1, &vertexBuffer);
@@ -1445,6 +1457,11 @@ auto main() -> int32_t {
 
     glDeleteVertexArrays(1, &g_defaultInputLayout);
 
+    glDeleteProgram(simpleVertexShader);
+    glDeleteProgram(simpleFragmentShader);
+    glDeleteProgram(simpleDebugFragmentShader);
+    glDeleteProgram(fullscreenTriangleVertexShader);
+    glDeleteProgram(fullscreenTriangleFragmentShader);
     glDeleteProgramPipelines(1, &simpleDebugProgramPipeline);
     glDeleteProgramPipelines(1, &simpleProgramPipeline);
     glDeleteProgramPipelines(1, &g_fullscreenTrianglePipeline);
