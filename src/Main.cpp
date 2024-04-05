@@ -120,7 +120,9 @@ struct SCpuMaterial {
     glm::vec4 BaseColor;
 };
 
-struct SGpuMaterial {
+struct alignas(8) SGpuMaterial {
+    glm::vec4 BaseColor;
+
     uint64_t BaseTextureHandle;
     uint64_t NormalTextureHandle;
     uint64_t OcclusionTextureHandle;
@@ -128,8 +130,6 @@ struct SGpuMaterial {
 
     uint64_t EmissiveTextureHandle;
     uint64_t _padding1;
-
-    glm::vec4 BaseColor;
 };
 
 struct alignas(4) SDebugOptions {
@@ -601,6 +601,15 @@ auto CreateImageData(
     };
 }
 
+auto BitfieldExtract(int32_t a, int32_t b, int32_t c) -> int32_t
+{
+  int mask = ~(0xffffffff << c);
+  if (b > 0)
+    return (a >> (b - 1)) & mask;
+  else
+    return a & mask;
+}
+
 auto AddModelFromFile(
     const std::string& modelName,
     std::filesystem::path filePath,
@@ -720,7 +729,7 @@ auto AddModelFromFile(
         };
     });    
 
-    for (auto& fgTexture : asset.textures) {
+    for (auto textureIndex = 0; auto& fgTexture : asset.textures) {
 
         auto imageIndex = fgTexture.imageIndex.has_value() ? fgTexture.imageIndex.value() : 0;
         auto samplerIndex = fgTexture.samplerIndex.has_value() ? fgTexture.samplerIndex.value() : 0;
@@ -1162,12 +1171,13 @@ auto main() -> int32_t {
         auto& cpuMaterial = g_cpuMaterials[mesh.MaterialIndex];
         glNamedBufferSubData(cpuMaterialBuffer, sizeof(SCpuMaterial) * meshIndex, sizeof(SGpuMaterial), &cpuMaterial);
         auto gpuMaterial = SGpuMaterial{
+            .BaseColor = cpuMaterial.BaseColor,
             .BaseTextureHandle = g_textureHandles[cpuMaterial.BaseTextureIndex],
             .NormalTextureHandle = g_textureHandles[cpuMaterial.NormalTextureIndex],
             .OcclusionTextureHandle = g_textureHandles[cpuMaterial.OcclusionTextureIndex],
             .MetallicRoughnessTextureHandle = g_textureHandles[cpuMaterial.MetallicRoughnessTextureIndex],
             .EmissiveTextureHandle = g_textureHandles[cpuMaterial.EmissiveTextureIndex],
-            .BaseColor = cpuMaterial.BaseColor
+            ._padding1 = 0,
         };
         glNamedBufferSubData(gpuMaterialBuffer, sizeof(SGpuMaterial) * meshIndex, sizeof(SGpuMaterial), &gpuMaterial);
 
@@ -1269,7 +1279,7 @@ auto main() -> int32_t {
 
         PushDebugGroup("SimplePipeline");
 
-        if (g_debugShowMaterialId == 1) {
+        if (g_debugShowMaterialId) {
             glBindProgramPipeline(simpleDebugProgramPipeline);
         } else {
             glBindProgramPipeline(simpleProgramPipeline);
@@ -1292,9 +1302,9 @@ auto main() -> int32_t {
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, objectBuffer);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, gpuMaterialBuffer);
 
-        if (g_debugShowMaterialId == 1) {
-            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 19, cpuMaterialBuffer);
-            glBindBufferBase(GL_UNIFORM_BUFFER, 20, debugOptionsBuffer);
+        if (g_debugShowMaterialId) {
+            //glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 19, cpuMaterialBuffer);
+            //glBindBufferBase(GL_UNIFORM_BUFFER, 20, debugOptionsBuffer);
         }
 
         glBindBuffer(GL_DRAW_INDIRECT_BUFFER, objectIndirectBuffer);
@@ -1351,11 +1361,16 @@ auto main() -> int32_t {
             static int drawMainFramebufferIndex = 0;
             if (ImGui::Begin("Debug")) {
 
-                ImGui::RadioButton("Albedo", &drawMainFramebufferIndex, 0);
-                ImGui::RadioButton("Normals", &drawMainFramebufferIndex, 1);
+                if (g_debugShowMaterialId) {
+                    ImGui::RadioButton("MaterialId", &drawMainFramebufferIndex, 0);
+                    ImGui::RadioButton("TextureHandle", &drawMainFramebufferIndex, 1);
+                } else {
+                    ImGui::RadioButton("Albedo", &drawMainFramebufferIndex, 0);
+                    ImGui::RadioButton("Normals", &drawMainFramebufferIndex, 1);
+                }
 
                 ImGui::Separator();
-                if (ImGui::Checkbox("Show Material Id", &g_debugShowMaterialId))
+                if (ImGui::Checkbox("Debug Colors", &g_debugShowMaterialId))
                 {
                     g_debugOptions.ShowMaterialId = g_debugShowMaterialId ? 1 : 0;
                 }
