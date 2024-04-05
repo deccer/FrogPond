@@ -114,13 +114,11 @@ struct SCpuMaterial {
     size_t EmissiveTextureIndex;
 
     size_t _padding1;
-    size_t _padding2;
-    size_t _padding3;
 
     glm::vec4 BaseColor;
 };
 
-struct alignas(8) SGpuMaterial {
+struct SGpuMaterial {
     glm::vec4 BaseColor;
 
     uint64_t BaseTextureHandle;
@@ -1164,12 +1162,9 @@ auto main() -> int32_t {
 
     // prepare material buffer, instance and indirect draw buffer
 
-    for (auto meshIndex = 0; auto& meshName : meshNames) {
-        auto& mesh = g_primitiveToMeshMap[meshName];
-        auto& transform = g_primitiveToInitialTransformMap[meshName];
+    for (auto materialIndex = 0; auto& cpuMaterial : g_cpuMaterials) {
 
-        auto& cpuMaterial = g_cpuMaterials[mesh.MaterialIndex];
-        glNamedBufferSubData(cpuMaterialBuffer, sizeof(SCpuMaterial) * meshIndex, sizeof(SGpuMaterial), &cpuMaterial);
+        glNamedBufferSubData(cpuMaterialBuffer, sizeof(SCpuMaterial) * materialIndex, sizeof(SGpuMaterial), &cpuMaterial);
         auto gpuMaterial = SGpuMaterial{
             .BaseColor = cpuMaterial.BaseColor,
             .BaseTextureHandle = g_textureHandles[cpuMaterial.BaseTextureIndex],
@@ -1179,7 +1174,13 @@ auto main() -> int32_t {
             .EmissiveTextureHandle = g_textureHandles[cpuMaterial.EmissiveTextureIndex],
             ._padding1 = 0,
         };
-        glNamedBufferSubData(gpuMaterialBuffer, sizeof(SGpuMaterial) * meshIndex, sizeof(SGpuMaterial), &gpuMaterial);
+        glNamedBufferSubData(gpuMaterialBuffer, sizeof(SGpuMaterial) * materialIndex, sizeof(SGpuMaterial), &gpuMaterial);
+        materialIndex++;
+    }
+
+    for (auto meshIndex = 0; auto& meshName : meshNames) {
+        auto& mesh = g_primitiveToMeshMap[meshName];
+        auto& transform = g_primitiveToInitialTransformMap[meshName];
 
         SObject object = {
             .WorldMatrix = glm::scale(glm::mat4(1.0f), glm::vec3(1.00f)) * transform,

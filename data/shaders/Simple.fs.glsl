@@ -15,12 +15,12 @@ struct SGpuMaterial
 {
     vec4 base_color;
 
-    uint64_t base_texture;
-    uint64_t normal_texture;
-    uint64_t occlusion_texture;
-    uint64_t metallic_roughness_texture;
+    uint64_t base_texture_handle;
+    uint64_t normal_texture_handle;
+    uint64_t occlusion_texture_handle;
+    uint64_t metallic_roughness_texture_handle;
 
-    uint64_t emissive_texture;
+    uint64_t emissive_texture_handle;
     uint64_t _padding1;
 };
 
@@ -33,6 +33,6 @@ void main()
 {
     SGpuMaterial material = GpuMaterials[v_material_id];
     
-    o_color = texture(sampler2D(material.base_texture), v_uv);
+    o_color = texture(sampler2D(material.base_texture_handle), v_uv);
     o_normal = vec4(v_normal * 0.5 + 0.5, 1.0);
 }
