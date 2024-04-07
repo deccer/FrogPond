@@ -50,6 +50,10 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
+#include <execution>
+#define POOLSTL_STD_SUPPLEMENT
+#include <poolstl/poolstl.hpp>
+
 enum class EWindowStyle {
     Windowed,
     Fullscreen,
@@ -643,7 +647,7 @@ auto AddModelFromFile(
     auto imageDates = std::vector<SImageData>(fgAsset.images.size());
     const auto imageIndices = std::ranges::iota_view{(std::size_t)0, fgAsset.images.size()};
 
-    std::transform(std::execution::par, imageIndices.begin(), imageIndices.end(), imageDates.begin(), [&](size_t imageIndex) {
+    std::transform(poolstl::execution::par, imageIndices.begin(), imageIndices.end(), imageDates.begin(), [&](size_t imageIndex) {
 
         const auto& fgImage = fgAsset.images[imageIndex];
 
@@ -707,7 +711,7 @@ auto AddModelFromFile(
 
     auto samplerDates = std::vector<SSamplerData>(fgAsset.samplers.size());
     const auto samplerIndices = std::ranges::iota_view{(std::size_t)0, fgAsset.samplers.size()};
-    std::transform(std::execution::par, samplerIndices.begin(), samplerIndices.end(), samplerDates.begin(), [&](size_t samplerIndex) {
+    std::transform(poolstl::execution::par, samplerIndices.begin(), samplerIndices.end(), samplerDates.begin(), [&](size_t samplerIndex) {
 
         const fastgltf::Sampler& fgSampler = fgAsset.samplers[samplerIndex];
 
@@ -957,7 +961,7 @@ auto main() -> int32_t {
         return -6;
     }
 
-    glfwSwapInterval(0);
+    glfwSwapInterval(1);
 
     glEnable(GL_FRAMEBUFFER_SRGB);
     glEnable(GL_CULL_FACE);
@@ -1211,11 +1215,12 @@ auto main() -> int32_t {
     }
 
     for (auto meshIndex = 0; auto& meshName : meshNames) {
+
         auto& mesh = g_primitiveToMeshMap[meshName];
         auto& transform = g_primitiveToInitialTransformMap[meshName];
 
         SObject object = {
-            .WorldMatrix = glm::scale(glm::mat4(1.0f), glm::vec3(1.00f)) * transform,
+            .WorldMatrix = glm::scale(glm::mat4(1.0f), glm::vec3(1.0f)) * transform,
             .InstanceParameter = glm::ivec4(mesh.MaterialIndex, 0, 0, 0)
         };
         glNamedBufferSubData(objectBuffer, sizeof(SObject) * meshIndex, sizeof(SObject), &object);

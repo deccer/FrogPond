@@ -78,6 +78,9 @@
         "complex": "cpp",
         "ranges": "cpp",
         "shared_mutex": "cpp",
-        "typeindex": "cpp"
+        "typeindex": "cpp",
+        "forward_list": "cpp",
+        "valarray": "cpp",
+        "execution": "cpp"
     }
 }

@@ -17,7 +17,7 @@ add_executable(FrogPond
         Main.cpp
 )
 
-target_link_libraries(FrogPond PRIVATE debugbreak glfw glad glm spdlog imgui implot meshoptimizer ktx fastgltf stb TracyClient)
+target_link_libraries(FrogPond PRIVATE debugbreak glfw glad glm spdlog imgui implot meshoptimizer ktx fastgltf stb TracyClient tbb poolSTL::poolSTL)
 
 if (USE_LILLYPAD)
         target_compile_definitions(FrogPond PUBLIC USE_LILLYPAD=1)
