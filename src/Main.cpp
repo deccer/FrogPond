@@ -42,6 +42,11 @@
 #include <fastgltf/tools.hpp>
 #include <fastgltf/types.hpp>
 
+#include <debugbreak.h>
+#if USE_LILLYPAD
+#include "Lillypad.hpp"
+#endif
+
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
@@ -868,6 +873,17 @@ auto main() -> int32_t {
         return -1;
     }
 
+#if USE_LILLYPAD
+    if (!LoadLillypad()) {
+        return -1;
+    }
+
+    SGpuInformation gpuInformation = {};
+    if (!UpdateGpuInformation(0, &gpuInformation)) {
+        return -1;
+    }
+#endif
+
     const auto isWindowWindowed = windowSettings.WindowStyle == EWindowStyle::Windowed;
     glfwWindowHint(GLFW_DECORATED, isWindowWindowed ? GLFW_TRUE : GLFW_FALSE);
     glfwWindowHint(GLFW_RESIZABLE, isWindowWindowed ? GLFW_TRUE : GLFW_FALSE);
@@ -1206,6 +1222,8 @@ auto main() -> int32_t {
     g_sceneViewerSize = g_framebufferSize;
     glm::vec2 scaledFramebufferSize = glm::vec2(g_sceneViewerSize) * windowSettings.ResolutionScale;
 
+    uint64_t frameCounter = 0;
+
     auto previousTimeInSeconds = glfwGetTime();
     auto accumulatedTimeInSeconds = 0.0;
     while (!glfwWindowShouldClose(g_window)) {
@@ -1335,11 +1353,17 @@ auto main() -> int32_t {
             ImGui::Separator();
 
             auto framesPerSecond = 1.0f / deltaTimeInSeconds;
-            ImGui::Text("rps: %.2f rad/s", glm::two_pi<float>() * framesPerSecond);
-            ImGui::Text("dps: %.2f °/s", glm::degrees(glm::two_pi<float>() * framesPerSecond));
-            ImGui::Text("fps: %.2f", framesPerSecond);
-            ImGui::Text("rpms: %.2f", framesPerSecond * 60.0f);
-            ImGui::Text("ft: %.2f ms", deltaTimeInSeconds * 1000.0f);
+            ImGui::Text("afps: %.0f rad/s", glm::two_pi<float>() * framesPerSecond);
+            ImGui::Text("dfps: %.0f °/s", glm::degrees(glm::two_pi<float>() * framesPerSecond));
+            ImGui::Text("rfps: %.0f", framesPerSecond);
+            ImGui::Text("rpms: %.0f", framesPerSecond * 60.0f);
+            ImGui::Text("  ft: %.2f ms", deltaTimeInSeconds * 1000.0f);
+#if USE_LILLYPAD
+            ImGui::Separator();
+            ImGui::Text("temp: %d °C", gpuInformation.GpuCoreTemperature);
+            ImGui::Text("  cs: %d (%d)/(%d) MHz", gpuInformation.ClockSpeedCurrent, gpuInformation.ClockSpeedMin, gpuInformation.ClockSpeedMax);
+            ImGui::Text(" mcs: %d (%d)/(%d) MHz", gpuInformation.MemoryClockSpeed, gpuInformation.MemoryClockSpeedMin, gpuInformation.MemoryClockSpeedMax);
+#endif
         }
         ImGui::End();
 
@@ -1447,6 +1471,13 @@ auto main() -> int32_t {
 
         glfwSwapBuffers(g_window);
         glfwPollEvents();        
+
+        frameCounter++;
+        if ((frameCounter % 2000) == 0) {
+#if USE_LILLYPAD            
+            UpdateGpuInformation(0, &gpuInformation);
+#endif
+        }
     }
 
     glDeleteSamplers(1, &g_fullscreenSamplerNearestNearestClampToEdge);
