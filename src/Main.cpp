@@ -28,7 +28,6 @@
 #include <stack>
 #include <variant>
 #include <ranges>
-#include <execution>
 #include <thread>
 #include <chrono>
 
@@ -41,6 +40,8 @@
 #include <fastgltf/core.hpp>
 #include <fastgltf/tools.hpp>
 #include <fastgltf/types.hpp>
+
+#include <tracy/Tracy.hpp>
 
 #include <debugbreak.h>
 #if USE_LILLYPAD
@@ -614,13 +615,14 @@ auto AddModelFromFile(
     const uint32_t megaVertexBuffer,
     const uint32_t megaIndexBuffer) -> void {
 
+    ZoneScoped;
     if (g_modelToPrimitiveMap.contains(modelName))
     {
         return;
     }
 
     auto& meshNames = g_modelToPrimitiveMap[modelName];
-
+    
     fastgltf::Parser parser(fastgltf::Extensions::KHR_mesh_quantization);
 
     constexpr auto gltfOptions =
@@ -649,7 +651,9 @@ auto AddModelFromFile(
 
     std::transform(poolstl::execution::par, imageIndices.begin(), imageIndices.end(), imageDates.begin(), [&](size_t imageIndex) {
 
+        ZoneScopedN("Load Image");
         const auto& fgImage = fgAsset.images[imageIndex];
+        ZoneName(fgImage.name.c_str(), fgImage.name.size());
 
         auto imageData = [&] {
 
@@ -688,7 +692,7 @@ auto AddModelFromFile(
             return SImageData{};
         }();
 
-        spdlog::info("Trying to load image {}", fgImage.name);
+        //spdlog::info("Trying to load image {}", fgImage.name);
 
         int32_t width = 0;
         int32_t height = 0;
@@ -734,6 +738,10 @@ auto AddModelFromFile(
 
         auto imageIndex = fgTexture.imageIndex.has_value() ? fgTexture.imageIndex.value() : 0;
         auto& imageData = imageDates[imageIndex];
+
+        ZoneScopedN("Create Textures");
+        ZoneName(imageData.Name.c_str(), imageData.Name.size());
+
         if (imageData.Data == nullptr) {
             continue;
         }
@@ -811,6 +819,9 @@ auto AddModelFromFile(
             for (const fastgltf::Mesh& fgMesh = fgAsset.meshes[node->meshIndex.value()];
                  const auto& primitive : fgMesh.primitives)
             {
+                ZoneScopedN("LoadPrimitive");
+                ZoneName(fgMesh.name.c_str(), fgMesh.name.size());
+
                 if (g_primitiveToMeshMap.contains(fgMesh.name.data()))
                 {
                     continue;
@@ -854,6 +865,7 @@ auto AddModelFromFile(
 
 auto main() -> int32_t {
 
+    ZoneScoped;
     SWindowSettings windowSettings = {
         .ResolutionWidth = 1920,
         .ResolutionHeight = 1080,
@@ -968,7 +980,8 @@ auto main() -> int32_t {
     glCullFace(GL_BACK);
     glFrontFace(GL_CCW);
     glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_LESS);
+    //glDepthFunc(GL_GREATER);
+    //glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
 
     glViewport(0, 0, g_framebufferSize.x, g_framebufferSize.y);
 
@@ -1012,7 +1025,8 @@ auto main() -> int32_t {
     g_fullscreenTrianglePipeline = CreateGraphicsProgramPipeline("FST", fullscreenTriangleVertexShader, fullscreenTriangleFragmentShader);
 
     SGlobalUniforms globalUniforms = {
-        .ProjectionMatrix = glm::perspectiveFovRH_ZO(glm::radians(60.0f), (float)g_framebufferSize.x, (float)g_framebufferSize.x, 0.1f, 1024.0f),
+        .ProjectionMatrix = glm::infinitePerspectiveRH_ZO(glm::radians(60.0f), (float)g_framebufferSize.x / (float)g_framebufferSize.x, 0.1f),
+        //.ProjectionMatrix = glm::perspectiveFovRH_ZO(glm::radians(60.0f), (float)g_framebufferSize.x, (float)g_framebufferSize.x, 0.1f, 1024.0f),
         .ViewMatrix = g_mainCamera.GetViewMatrix(),
         .CameraPosition = glm::vec4(g_mainCamera.Position, 0.0f)
     };
@@ -1170,11 +1184,20 @@ auto main() -> int32_t {
         megaVertexBuffer,
         megaIndexBuffer);
 */
+
     AddModelFromFile(
         "SM_Bistro",
         "data/scenes/Bistro52/scene.gltf",
         megaVertexBuffer,
         megaIndexBuffer);
+
+/*
+    AddModelFromFile(
+        "SM_Tower",
+        "data/scenes/Tower/scene.gltf",
+        megaVertexBuffer,
+        megaIndexBuffer);
+*/         
         
         /*
     AddModelFromFile(
@@ -1249,6 +1272,7 @@ auto main() -> int32_t {
     auto accumulatedTimeInSeconds = 0.0;
     while (!glfwWindowShouldClose(g_window)) {
 
+        ZoneScopedN("Render");
         auto currentTimeInSeconds = glfwGetTime();
         auto deltaTimeInSeconds = currentTimeInSeconds - previousTimeInSeconds;
         accumulatedTimeInSeconds += deltaTimeInSeconds;
@@ -1262,7 +1286,6 @@ auto main() -> int32_t {
         };
 
         glNamedBufferSubData(globalUniformsBuffer, 0, sizeof(SGlobalUniforms), &globalUniforms);
-
         glNamedBufferSubData(debugOptionsBuffer, 0, sizeof(SDebugOptions), &g_debugOptions);
 
         auto framebufferWasResized = false;
@@ -1270,6 +1293,7 @@ auto main() -> int32_t {
 
         if (g_sceneViewerResized || g_framebufferResized) {
 
+            ZoneScopedN("Resize");
             //glm::vec2 scaledFramebufferSize = glm::vec2{0.0f, 0.0f};
             if (g_isEditor) {
                 scaledFramebufferSize = glm::vec2(g_sceneViewerSize) * windowSettings.ResolutionScale;
