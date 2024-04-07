@@ -1170,13 +1170,13 @@ auto main() -> int32_t {
         megaVertexBuffer,
         megaIndexBuffer);
         */
-       /*
+       
     AddModelFromFile(
         "SM_Complex",
         "data/default/SM_Deccer_Cubes_Textured.gltf",
         megaVertexBuffer,
         megaIndexBuffer);
-        */
+        
 /*
     AddModelFromFile(
         "SM_Helmet",
@@ -1184,13 +1184,13 @@ auto main() -> int32_t {
         megaVertexBuffer,
         megaIndexBuffer);
 */
-
+/*
     AddModelFromFile(
         "SM_Bistro",
         "data/scenes/Bistro52/scene.gltf",
         megaVertexBuffer,
         megaIndexBuffer);
-
+*/
 /*
     AddModelFromFile(
         "SM_Tower",
@@ -1207,7 +1207,7 @@ auto main() -> int32_t {
         megaIndexBuffer);
         */
 
-    auto& meshNames = g_modelToPrimitiveMap["SM_Bistro"];
+    auto& meshNames = g_modelToPrimitiveMap["SM_Complex"];
 
     // prepare material buffer, instance and indirect draw buffer
 
