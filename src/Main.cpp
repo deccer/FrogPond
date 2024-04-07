@@ -645,15 +645,16 @@ auto AddModelFromFile(
 
     std::transform(std::execution::par, imageIndices.begin(), imageIndices.end(), imageDates.begin(), [&](size_t imageIndex) {
 
-        const fastgltf::Image& fgImage = fgAsset.images[imageIndex];
+        const auto& fgImage = fgAsset.images[imageIndex];
 
         auto imageData = [&] {
 
             if (const auto* filePathUri = std::get_if<fastgltf::sources::URI>(&fgImage.data)) {
 
                 auto filePathFixed = std::filesystem::path(filePathUri->uri.path());
+                auto filePathParent = filePath.parent_path();
                 if (filePathFixed.is_relative()) {
-                    filePathFixed = filePath.parent_path() / filePathFixed.filename();
+                    filePathFixed = filePath.parent_path() / filePathFixed;
                 }
                 auto fileData = ReadBinaryFromFile(filePathFixed);
                 return CreateImageData(fileData.first.get(), fileData.second, filePathUri->mimeType, fgImage.name);
@@ -728,9 +729,12 @@ auto AddModelFromFile(
     for (auto textureIndex = 0; auto& fgTexture : fgAsset.textures) {
 
         auto imageIndex = fgTexture.imageIndex.has_value() ? fgTexture.imageIndex.value() : 0;
-        auto samplerIndex = fgTexture.samplerIndex.has_value() ? fgTexture.samplerIndex.value() : 0;
-
         auto& imageData = imageDates[imageIndex];
+        if (imageData.Data == nullptr) {
+            continue;
+        }
+
+        auto samplerIndex = fgTexture.samplerIndex.has_value() ? fgTexture.samplerIndex.value() : 0;        
         auto& samplerData = samplerDates[samplerIndex];
 
         auto sampler = GetOrCreateSampler(samplerData);
@@ -739,7 +743,7 @@ auto AddModelFromFile(
         glCreateTextures(GL_TEXTURE_2D, 1, &textureId);
         SetDebugLabel(textureId, GL_TEXTURE, std::to_string(textureId));
         glTextureStorage2D(textureId, CalculateMipmapLevels(imageData.Width, imageData.Height), GL_SRGB8_ALPHA8, imageData.Width, imageData.Height);
-        glTextureSubImage2D(textureId, 0, 0, 0, imageData.Width, imageData.Height, GL_RGBA, GL_UNSIGNED_BYTE, imageData.Data.get());
+        glTextureSubImage2D(textureId, 0, 0, 0, imageData.Width, imageData.Height, GL_RGBA, imageData.PixelType, imageData.Data.get());
         glGenerateTextureMipmap(textureId);
         imageData.Data.release();
 
@@ -1148,10 +1152,23 @@ auto main() -> int32_t {
         megaVertexBuffer,
         megaIndexBuffer);
         */
-       
+       /*
     AddModelFromFile(
         "SM_Complex",
         "data/default/SM_Deccer_Cubes_Textured.gltf",
+        megaVertexBuffer,
+        megaIndexBuffer);
+        */
+/*
+    AddModelFromFile(
+        "SM_Helmet",
+        "data/scenes/DamagedHelmet/DamagedHelmet.gltf",
+        megaVertexBuffer,
+        megaIndexBuffer);
+*/
+    AddModelFromFile(
+        "SM_Bistro",
+        "data/scenes/Bistro52/scene.gltf",
         megaVertexBuffer,
         megaIndexBuffer);
         
@@ -1163,7 +1180,7 @@ auto main() -> int32_t {
         megaIndexBuffer);
         */
 
-    auto& meshNames = g_modelToPrimitiveMap["SM_Complex"];
+    auto& meshNames = g_modelToPrimitiveMap["SM_Bistro"];
 
     // prepare material buffer, instance and indirect draw buffer
 
@@ -1401,36 +1418,80 @@ auto main() -> int32_t {
             }
             ImGui::End();
 
-/*
-            if (ImGui::Begin("Materials")) {
-                auto availableSceneWindowSize = ImVec2{64, 64};
-                for ( auto materialIndex = 0; auto& cpuMaterial : g_cpuMaterials) {
-                    
-                    ImGui::TextColored(ImVec4{1.0f, 0.8f, 0.0f, 1.0f}, std::format("Base Texture ({})", cpuMaterial.BaseTextureIndex).c_str());
-                    ImGui::Image(reinterpret_cast<ImTextureID>(g_textures[cpuMaterial.BaseTextureIndex]), availableSceneWindowSize, g_imvec2UnitY, g_imvec2UnitX);
-                    ImGui::Separator();
 
-                    ImGui::TextColored(ImVec4{1.0f, 0.8f, 0.0f, 1.0f}, std::format("Normal Texture ({})", cpuMaterial.NormalTextureIndex).c_str());
-                    ImGui::Image(reinterpret_cast<ImTextureID>(g_textures[cpuMaterial.NormalTextureIndex]), availableSceneWindowSize, g_imvec2UnitY, g_imvec2UnitX);
-                    ImGui::Separator();
+            if (!g_cpuMaterials.empty()) {
+                if (ImGui::Begin("Materials")) {
+                    auto textureSize = ImVec2{32, 32};
+                    auto textureSizeLarge = ImVec2{512, 512};
+                    for ( auto materialIndex = 0; auto& cpuMaterial : g_cpuMaterials) {
+                        
+                        if (ImGui::CollapsingHeader(cpuMaterial.Name.data())) {
+                            if (cpuMaterial.BaseTextureIndex.has_value()) {
+                                ImGui::Image(reinterpret_cast<ImTextureID>(g_textures[cpuMaterial.BaseTextureIndex.value()]), textureSize, g_imvec2UnitY, g_imvec2UnitX);
+                                if (ImGui::BeginItemTooltip())
+                                {
+                                    ImGui::Image(reinterpret_cast<ImTextureID>(g_textures[cpuMaterial.BaseTextureIndex.value()]), textureSizeLarge, g_imvec2UnitY, g_imvec2UnitX);
+                                    ImGui::EndTooltip();
+                                }
+                                ImGui::SameLine();
+                                ImGui::TextUnformatted(std::format("Base Texture ({})", cpuMaterial.BaseTextureIndex.value()).c_str());
+                                ImGui::Separator();
+                            }
 
-                    ImGui::TextColored(ImVec4{1.0f, 0.8f, 0.0f, 1.0f}, std::format("Occlusion Texture ({})", cpuMaterial.OcclusionTextureIndex).c_str());
-                    ImGui::Image(reinterpret_cast<ImTextureID>(g_textures[cpuMaterial.OcclusionTextureIndex]), availableSceneWindowSize, g_imvec2UnitY, g_imvec2UnitX);
-                    ImGui::Separator();
+                            if (cpuMaterial.NormalTextureIndex.has_value()) {
+                                ImGui::Image(reinterpret_cast<ImTextureID>(g_textures[cpuMaterial.NormalTextureIndex.value()]), textureSize, g_imvec2UnitY, g_imvec2UnitX);
+                                if (ImGui::BeginItemTooltip())
+                                {
+                                    ImGui::Image(reinterpret_cast<ImTextureID>(g_textures[cpuMaterial.NormalTextureIndex.value()]), textureSizeLarge, g_imvec2UnitY, g_imvec2UnitX);
+                                    ImGui::EndTooltip();
+                                }
+                                ImGui::SameLine();
+                                ImGui::TextUnformatted(std::format("Normal Texture ({})", cpuMaterial.NormalTextureIndex.value()).c_str());
+                                ImGui::Separator();
+                            }
 
-                    ImGui::TextColored(ImVec4{1.0f, 0.8f, 0.0f, 1.0f}, std::format("Metalness Roughness Texture ({})", cpuMaterial.MetallicRoughnessTextureIndex).c_str());
-                    ImGui::Image(reinterpret_cast<ImTextureID>(g_textures[cpuMaterial.MetallicRoughnessTextureIndex]), availableSceneWindowSize, g_imvec2UnitY, g_imvec2UnitX);
-                    ImGui::Separator();
+                            if (cpuMaterial.OcclusionTextureIndex.has_value()) {
+                                ImGui::Image(reinterpret_cast<ImTextureID>(g_textures[cpuMaterial.OcclusionTextureIndex.value()]), textureSize, g_imvec2UnitY, g_imvec2UnitX);
+                                if (ImGui::BeginItemTooltip())
+                                {
+                                    ImGui::Image(reinterpret_cast<ImTextureID>(g_textures[cpuMaterial.OcclusionTextureIndex.value()]), textureSizeLarge, g_imvec2UnitY, g_imvec2UnitX);
+                                    ImGui::EndTooltip();
+                                }
+                                ImGui::SameLine();                                
+                                ImGui::TextUnformatted(std::format("Occlusion Texture ({})", cpuMaterial.OcclusionTextureIndex.value()).c_str());
+                                ImGui::Separator();
+                            }
 
-                    ImGui::TextColored(ImVec4{1.0f, 0.8f, 0.0f, 1.0f}, std::format("Emissive Texture ({})", cpuMaterial.EmissiveTextureIndex).c_str());
-                    ImGui::Image(reinterpret_cast<ImTextureID>(g_textures[cpuMaterial.EmissiveTextureIndex]), availableSceneWindowSize, g_imvec2UnitY, g_imvec2UnitX);
-                    ImGui::Separator();
+                            if (cpuMaterial.MetallicRoughnessTextureIndex.has_value()) {
+                                ImGui::Image(reinterpret_cast<ImTextureID>(g_textures[cpuMaterial.MetallicRoughnessTextureIndex.value()]), textureSize, g_imvec2UnitY, g_imvec2UnitX);
+                                if (ImGui::BeginItemTooltip())
+                                {
+                                    ImGui::Image(reinterpret_cast<ImTextureID>(g_textures[cpuMaterial.MetallicRoughnessTextureIndex.value()]), textureSizeLarge, g_imvec2UnitY, g_imvec2UnitX);
+                                    ImGui::EndTooltip();
+                                }
+                                ImGui::SameLine();
+                                ImGui::TextUnformatted(std::format("Metalness Roughness Texture ({})", cpuMaterial.MetallicRoughnessTextureIndex.value()).c_str());
+                                ImGui::Separator();
+                            }
 
-                    materialIndex++;
+                            if (cpuMaterial.EmissiveTextureIndex.has_value()) {
+                                ImGui::Image(reinterpret_cast<ImTextureID>(g_textures[cpuMaterial.EmissiveTextureIndex.value()]), textureSize, g_imvec2UnitY, g_imvec2UnitX);
+                                if (ImGui::BeginItemTooltip())
+                                {
+                                    ImGui::Image(reinterpret_cast<ImTextureID>(g_textures[cpuMaterial.EmissiveTextureIndex.value()]), textureSizeLarge, g_imvec2UnitY, g_imvec2UnitX);
+                                    ImGui::EndTooltip();
+                                }
+                                ImGui::SameLine();
+                                ImGui::TextUnformatted(std::format("Emissive Texture ({})", cpuMaterial.EmissiveTextureIndex.value()).c_str());
+                                ImGui::Separator();
+                            }
+                        }
+
+                        materialIndex++;
+                    }
                 }
+                ImGui::End();
             }
-            ImGui::End();
-            */
 
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
             if (ImGui::Begin("Scene")) {
