@@ -379,21 +379,8 @@ auto OnOpenGLDebugMessage(
 
     if (type == GL_DEBUG_TYPE_ERROR) {
         spdlog::error(message);
-        __asm__ volatile("int $0x03"); // portable enough for lunix and binbows
+        debug_break();
     }
-}
-
-auto CreateTextureSampler() -> uint32_t {
-    uint32_t sampler = 0;
-    glCreateSamplers(1, &sampler);
-    glSamplerParameteri(sampler, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glSamplerParameteri(sampler, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    glSamplerParameteri(sampler, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glSamplerParameteri(sampler, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glSamplerParameterf(sampler, GL_TEXTURE_LOD_BIAS, 0.0f);
-    glSamplerParameteri(sampler, GL_TEXTURE_MIN_LOD, -1000);
-    glSamplerParameteri(sampler, GL_TEXTURE_MAX_LOD, 1000);
-    return sampler;
 }
 
 auto GetOrCreateSampler(SSamplerData samplerData) -> uint32_t {

@@ -154,3 +154,37 @@ if(NOT stb)
     add_library(stb INTERFACE ${stb_SOURCE_DIR}/stb_image.h)
     target_include_directories(stb INTERFACE ${stb_SOURCE_DIR})
 endif()
+
+#- tracy ---------------------------------------------------------------------------------------------------------------
+
+FetchContent_Declare(
+    tracy
+    GIT_REPOSITORY  https://github.com/wolfpld/tracy.git
+    GIT_TAG         master
+    GIT_SHALLOW     TRUE
+    GIT_PROGRESS    TRUE
+)
+
+set(TRACY_ENABLE ON CACHE BOOL "Enable profiling")
+set(TRACY_NO_SYSTEM_TRACING ON CACHE BOOL "Disable System Tracing")
+set(TRACY_ONLY_IPV4 ON CACHE BOOL "IPv4 only")
+message("Fetching tracy")
+FetchContent_MakeAvailable(tracy)
+
+#- debugbreak-----------------------------------------------------------------------------------------------------------
+
+FetchContent_Declare(
+    debugbreak
+    GIT_REPOSITORY https://github.com/scottt/debugbreak
+    GIT_SHALLOW    TRUE
+    GIT_PROGRESS   TRUE
+)
+
+FetchContent_GetProperties(debugbreak)
+if(NOT debugbreak_POPULATED)
+    message("Fetching debugbreak")
+    FetchContent_Populate(debugbreak)
+
+    add_library(debugbreak INTERFACE ${debugbreak_SOURCE_DIR}/debugbreak.h)
+    target_include_directories(debugbreak INTERFACE ${debugbreak_SOURCE_DIR})
+endif()
