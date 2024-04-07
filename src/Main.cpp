@@ -112,11 +112,12 @@ struct SMesh {
 };
 
 struct SCpuMaterial {
-    size_t BaseTextureIndex;
-    size_t NormalTextureIndex;
-    size_t OcclusionTextureIndex;
-    size_t MetallicRoughnessTextureIndex;
-    size_t EmissiveTextureIndex;
+    std::string Name;
+    std::optional<size_t> BaseTextureIndex;
+    std::optional<size_t> NormalTextureIndex;
+    std::optional<size_t> OcclusionTextureIndex;
+    std::optional<size_t> MetallicRoughnessTextureIndex;
+    std::optional<size_t> EmissiveTextureIndex;
 
     size_t _padding1;
 
@@ -270,6 +271,9 @@ auto CreateProgram(
     const std::string_view label) -> std::expected<uint32_t, std::string> {
 
     const auto shaderSource = ReadTextFromFile(filePath);
+    if (shaderSource.empty()) {
+        return std::unexpected(std::format("Either file {} was not found or is empty", filePath));
+    }
     const auto shaderSourcePtr = shaderSource.data();
     auto program = glCreateShaderProgramv(shaderType, 1, &shaderSourcePtr);
     SetDebugLabel(program, GL_PROGRAM, label);
@@ -290,30 +294,30 @@ auto CreateProgram(
     return program;
 }
 
-auto CreateProgramPipeline(
+auto CreateGraphicsProgramPipeline(
     const std::string_view label,
     const uint32_t vertexShader,
     const uint32_t fragmentShader) -> uint32_t {
 
-    uint32_t pipeline = 0;
-    glCreateProgramPipelines(1, &pipeline);
-    SetDebugLabel(pipeline, GL_PROGRAM_PIPELINE, label);
-    glUseProgramStages(pipeline, GL_VERTEX_SHADER_BIT, vertexShader);
-    glUseProgramStages(pipeline, GL_FRAGMENT_SHADER_BIT, fragmentShader);
+    uint32_t programPipeline = 0;
+    glCreateProgramPipelines(1, &programPipeline);
+    SetDebugLabel(programPipeline, GL_PROGRAM_PIPELINE, label);
+    glUseProgramStages(programPipeline, GL_VERTEX_SHADER_BIT, vertexShader);
+    glUseProgramStages(programPipeline, GL_FRAGMENT_SHADER_BIT, fragmentShader);
 
-    return pipeline;
+    return programPipeline;
 }
 
-auto CreateProgramPipeline(
+auto CreateComputeProgramPipeline(
     const std::string_view label,
     const uint32_t computeShader) -> uint32_t {
 
-    uint32_t pipeline = 0;
-    glCreateProgramPipelines(1, &pipeline);
-    SetDebugLabel(GL_PROGRAM_PIPELINE, pipeline, label);
-    glUseProgramStages(pipeline, GL_COMPUTE_SHADER_BIT, computeShader);
+    uint32_t programPipeline = 0;
+    glCreateProgramPipelines(1, &programPipeline);
+    SetDebugLabel(GL_PROGRAM_PIPELINE, programPipeline, label);
+    glUseProgramStages(programPipeline, GL_COMPUTE_SHADER_BIT, computeShader);
 
-    return pipeline;
+    return programPipeline;
 }
 
 auto OnKey(
@@ -619,8 +623,10 @@ auto AddModelFromFile(
         fastgltf::Options::DontRequireValidAssetMember |
         fastgltf::Options::AllowDouble |
         fastgltf::Options::LoadGLBBuffers |
-        fastgltf::Options::LoadExternalBuffers |
-        fastgltf::Options::LoadExternalImages;
+        fastgltf::Options::LoadExternalBuffers
+        /*
+         |
+        fastgltf::Options::LoadExternalImages*/;
 
     fastgltf::GltfDataBuffer data;
     data.loadFromFile(filePath);
@@ -632,44 +638,44 @@ auto AddModelFromFile(
         return;
     }
 
-    auto& asset = assetResult.get();
+    auto& fgAsset = assetResult.get();
 
-    auto imageDates = std::vector<SImageData>(asset.images.size());
-    const auto imageIndices = std::ranges::iota_view{(std::size_t)0, asset.images.size()};
+    auto imageDates = std::vector<SImageData>(fgAsset.images.size());
+    const auto imageIndices = std::ranges::iota_view{(std::size_t)0, fgAsset.images.size()};
 
     std::transform(std::execution::par, imageIndices.begin(), imageIndices.end(), imageDates.begin(), [&](size_t imageIndex) {
 
-        const fastgltf::Image& image = asset.images[imageIndex];
+        const fastgltf::Image& fgImage = fgAsset.images[imageIndex];
 
         auto imageData = [&] {
 
-            if (const auto* filePathUri = std::get_if<fastgltf::sources::URI>(&image.data)) {
+            if (const auto* filePathUri = std::get_if<fastgltf::sources::URI>(&fgImage.data)) {
 
-                auto filePathFixed = std::string(filePathUri->uri.path());
-                if (!std::filesystem::exists(filePathUri->uri.path())) {
-                    filePathFixed = filePath.parent_path() / std::filesystem::path(filePathFixed);
+                auto filePathFixed = std::filesystem::path(filePathUri->uri.path());
+                if (filePathFixed.is_relative()) {
+                    filePathFixed = filePath.parent_path() / filePathFixed.filename();
                 }
                 auto fileData = ReadBinaryFromFile(filePathFixed);
-                return CreateImageData(fileData.first.get(), fileData.second, filePathUri->mimeType, image.name);
+                return CreateImageData(fileData.first.get(), fileData.second, filePathUri->mimeType, fgImage.name);
             }
-            if (const auto* vector = std::get_if<fastgltf::sources::Array>(&image.data)) {
+            if (const auto* vector = std::get_if<fastgltf::sources::Array>(&fgImage.data)) {
 
-                return CreateImageData(vector->bytes.data(), vector->bytes.size(), vector->mimeType, image.name);
+                return CreateImageData(vector->bytes.data(), vector->bytes.size(), vector->mimeType, fgImage.name);
             }
-            if (const auto* vector = std::get_if<fastgltf::sources::Vector>(&image.data)) {
+            if (const auto* vector = std::get_if<fastgltf::sources::Vector>(&fgImage.data)) {
 
-                return CreateImageData(vector->bytes.data(), vector->bytes.size(), vector->mimeType, image.name);
+                return CreateImageData(vector->bytes.data(), vector->bytes.size(), vector->mimeType, fgImage.name);
             }
-            if (const auto* view = std::get_if<fastgltf::sources::BufferView>(&image.data)) {
+            if (const auto* view = std::get_if<fastgltf::sources::BufferView>(&fgImage.data)) {
 
-                auto& bufferView = asset.bufferViews[view->bufferViewIndex];
-                auto& buffer = asset.buffers[bufferView.bufferIndex];
+                auto& bufferView = fgAsset.bufferViews[view->bufferViewIndex];
+                auto& buffer = fgAsset.buffers[bufferView.bufferIndex];
                 if (const auto* vector = std::get_if<fastgltf::sources::Array>(&buffer.data)) {
                     return CreateImageData(
                         vector->bytes.data() + bufferView.byteOffset, 
                         buffer.byteLength,
                         view->mimeType,
-                        image.name);
+                        fgImage.name);
                 }
 
             }
@@ -677,7 +683,7 @@ auto AddModelFromFile(
             return SImageData{};
         }();
 
-        spdlog::info("Trying to load image {}", image.name);
+        spdlog::info("Trying to load image {}", fgImage.name);
 
         int32_t width = 0;
         int32_t height = 0;
@@ -698,28 +704,28 @@ auto AddModelFromFile(
         return imageData;
     });
 
-    auto samplerDates = std::vector<SSamplerData>(asset.samplers.size());
-    const auto samplerIndices = std::ranges::iota_view{(std::size_t)0, asset.samplers.size()};
+    auto samplerDates = std::vector<SSamplerData>(fgAsset.samplers.size());
+    const auto samplerIndices = std::ranges::iota_view{(std::size_t)0, fgAsset.samplers.size()};
     std::transform(std::execution::par, samplerIndices.begin(), samplerIndices.end(), samplerDates.begin(), [&](size_t samplerIndex) {
 
-        const fastgltf::Sampler& sampler = asset.samplers[samplerIndex];
+        const fastgltf::Sampler& fgSampler = fgAsset.samplers[samplerIndex];
 
-        auto hash1 = std::hash<uint32_t>()(sampler.minFilter.has_value() ? static_cast<uint32_t>(sampler.minFilter.value()) : GL_NEAREST);
-        auto hash2 = std::hash<uint32_t>()(sampler.magFilter.has_value() ? static_cast<uint32_t>(sampler.magFilter.value()) : GL_NEAREST);
-        auto hash3 = std::hash<uint32_t>()(static_cast<uint32_t>(sampler.wrapS));
-        auto hash4 = std::hash<uint32_t>()(static_cast<uint32_t>(sampler.wrapT));
+        auto hash1 = std::hash<uint32_t>()(fgSampler.minFilter.has_value() ? static_cast<uint32_t>(fgSampler.minFilter.value()) : GL_NEAREST);
+        auto hash2 = std::hash<uint32_t>()(fgSampler.magFilter.has_value() ? static_cast<uint32_t>(fgSampler.magFilter.value()) : GL_NEAREST);
+        auto hash3 = std::hash<uint32_t>()(static_cast<uint32_t>(fgSampler.wrapS));
+        auto hash4 = std::hash<uint32_t>()(static_cast<uint32_t>(fgSampler.wrapT));
         auto hash = hash1 ^ (hash2 << 1) ^ (hash3 << 2) ^ (hash4 << 3);
         
         return SSamplerData{
             .Name = hash,
-            .MinFilter = sampler.minFilter.has_value() ? static_cast<uint32_t>(sampler.minFilter.value()) : GL_NEAREST,
-            .MagFilter = sampler.magFilter.has_value() ? static_cast<uint32_t>(sampler.magFilter.value()) : GL_NEAREST,
-            .WrapS = static_cast<uint32_t>(sampler.wrapS),
-            .WrapT = static_cast<uint32_t>(sampler.wrapT)
+            .MinFilter = fgSampler.minFilter.has_value() ? static_cast<uint32_t>(fgSampler.minFilter.value()) : GL_NEAREST,
+            .MagFilter = fgSampler.magFilter.has_value() ? static_cast<uint32_t>(fgSampler.magFilter.value()) : GL_NEAREST,
+            .WrapS = static_cast<uint32_t>(fgSampler.wrapS),
+            .WrapT = static_cast<uint32_t>(fgSampler.wrapT)
         };
     });    
 
-    for (auto textureIndex = 0; auto& fgTexture : asset.textures) {
+    for (auto textureIndex = 0; auto& fgTexture : fgAsset.textures) {
 
         auto imageIndex = fgTexture.imageIndex.has_value() ? fgTexture.imageIndex.value() : 0;
         auto samplerIndex = fgTexture.samplerIndex.has_value() ? fgTexture.samplerIndex.value() : 0;
@@ -744,36 +750,28 @@ auto AddModelFromFile(
         g_textureHandles.push_back(textureHandle);        
     }
 
-    for (auto& fgMaterial : asset.materials) {
+    for (auto& fgMaterial : fgAsset.materials) {
 
-        auto baseTextureIndex = fgMaterial.pbrData.baseColorTexture.has_value()
-            ? fgMaterial.pbrData.baseColorTexture.value().textureIndex
-            : 0;
+        SCpuMaterial cpuMaterial;
 
-        auto normalTextureIndex = fgMaterial.normalTexture.has_value()
-            ? fgMaterial.normalTexture.value().textureIndex
-            : 0;
+        cpuMaterial.Name = fgMaterial.name;
 
-        auto occlusionTextureIndex = fgMaterial.occlusionTexture.has_value()
-            ? fgMaterial.occlusionTexture.value().textureIndex
-            : 0;
-
-        auto metallicRoughnessTextureIndex = fgMaterial.pbrData.metallicRoughnessTexture.has_value()
-            ? fgMaterial.pbrData.metallicRoughnessTexture.value().textureIndex
-            : 0;
-
-        auto emissiveTextureIndex = fgMaterial.emissiveTexture.has_value()
-            ? fgMaterial.emissiveTexture.value().textureIndex
-            : 0;
-
-        SCpuMaterial cpuMaterial = {
-            .BaseTextureIndex = baseTextureIndex,
-            .NormalTextureIndex = normalTextureIndex,
-            .OcclusionTextureIndex = occlusionTextureIndex,
-            .MetallicRoughnessTextureIndex = metallicRoughnessTextureIndex,
-            .EmissiveTextureIndex = emissiveTextureIndex,
-            .BaseColor = glm::vec4(0.0f, 0.0f, 1.0f, 1.0f)
-        };
+        cpuMaterial.BaseColor = glm::make_vec4(fgMaterial.pbrData.baseColorFactor.data());
+        if (fgMaterial.pbrData.baseColorTexture.has_value()) {
+            cpuMaterial.BaseTextureIndex = std::move(fgMaterial.pbrData.baseColorTexture.value().textureIndex);
+        }
+        if (fgMaterial.normalTexture.has_value()) {
+            cpuMaterial.NormalTextureIndex = std::move(fgMaterial.normalTexture.value().textureIndex);
+        }
+        if (fgMaterial.occlusionTexture.has_value()) {
+            cpuMaterial.OcclusionTextureIndex = std::move(fgMaterial.occlusionTexture.value().textureIndex);
+        }
+        if (fgMaterial.pbrData.metallicRoughnessTexture.has_value()) {
+            cpuMaterial.MetallicRoughnessTextureIndex = std::move(fgMaterial.pbrData.metallicRoughnessTexture.value().textureIndex);
+        }
+        if (fgMaterial.emissiveTexture.has_value()) {
+            cpuMaterial.EmissiveTextureIndex = std::move(fgMaterial.emissiveTexture.value().textureIndex);
+        }
 
         g_cpuMaterials.push_back(cpuMaterial);
     }
@@ -781,9 +779,9 @@ auto AddModelFromFile(
     std::stack<std::pair<const fastgltf::Node*, glm::mat4>> nodeStack;
     glm::mat4 rootTransform = glm::mat4(1.0f);
 
-    for (auto nodeIndex : asset.scenes[0].nodeIndices)
+    for (auto nodeIndex : fgAsset.scenes[0].nodeIndices)
     {
-        nodeStack.emplace(&asset.nodes[nodeIndex], rootTransform);
+        nodeStack.emplace(&fgAsset.nodes[nodeIndex], rootTransform);
     }
    
     while (!nodeStack.empty())
@@ -797,12 +795,12 @@ auto AddModelFromFile(
 
         for (auto childNodeIndex : node->children)
         {
-            nodeStack.emplace(&asset.nodes[childNodeIndex], globalTransform);
+            nodeStack.emplace(&fgAsset.nodes[childNodeIndex], globalTransform);
         }
 
         if (node->meshIndex.has_value())
         {
-            for (const fastgltf::Mesh& fgMesh = asset.meshes[node->meshIndex.value()];
+            for (const fastgltf::Mesh& fgMesh = fgAsset.meshes[node->meshIndex.value()];
                  const auto& primitive : fgMesh.primitives)
             {
                 if (g_primitiveToMeshMap.contains(fgMesh.name.data()))
@@ -818,8 +816,8 @@ auto AddModelFromFile(
                 meshNames.emplace_back(primitiveName);
                 g_primitiveNameToMaterialIdMap.insert({primitiveName, materialIndex});
 
-                auto vertices = GetVertices(asset, primitive);
-                auto indices = GetIndices(asset, primitive);
+                auto vertices = GetVertices(fgAsset, primitive);
+                auto indices = GetIndices(fgAsset, primitive);
 
                 SMesh mesh = {
                     .VertexCount = vertices.size(),
@@ -955,7 +953,7 @@ auto main() -> int32_t {
         return -6;
     }
 
-    glfwSwapInterval(1);
+    glfwSwapInterval(0);
 
     glEnable(GL_FRAMEBUFFER_SRGB);
     glEnable(GL_CULL_FACE);
@@ -965,16 +963,6 @@ auto main() -> int32_t {
     glDepthFunc(GL_LESS);
 
     glViewport(0, 0, g_framebufferSize.x, g_framebufferSize.y);
-
-    std::vector<SVertexPositionColor> vertices = {
-        SVertexPositionColor{{+0.0f, +0.5f, +0.0f}, {0.6f, 0.1f, 0.8f, 1.0f}},
-        SVertexPositionColor{{-0.5f, -0.5f, +0.0f}, {0.1f, 0.8f, 0.6f, 1.0f}},
-        SVertexPositionColor{{+0.5f, -0.5f, +0.0f}, {0.8f, 0.6f, 0.1f, 1.0f}},
-    };
-    std::vector<uint32_t> indices = {0, 1, 2};
-
-    auto vertexBuffer = CreateBuffer("VertexBuffer", sizeof(SVertexPositionColor) * vertices.size(), vertices.data(), GL_STATIC_DRAW);
-    auto indexBuffer = CreateBuffer("IndexBuffer", sizeof(uint32_t) * indices.size(), indices.data(), GL_STATIC_DRAW);
 
     auto simpleVertexShaderResult = CreateProgram(GL_VERTEX_SHADER, "data/shaders/Simple.vs.glsl", "Simple.vs.glsl");
     if (!simpleVertexShaderResult) {
@@ -1011,9 +999,9 @@ auto main() -> int32_t {
     }
     auto fullscreenTriangleFragmentShader = *fullscreenTriangleFragmentShaderResult;
 
-    auto simpleProgramPipeline = CreateProgramPipeline("SimplePipeline", simpleVertexShader, simpleFragmentShader);
-    auto simpleDebugProgramPipeline = CreateProgramPipeline("SimpleDebugPipeline", simpleVertexShader, simpleDebugFragmentShader);
-    g_fullscreenTrianglePipeline = CreateProgramPipeline("FST", fullscreenTriangleVertexShader, fullscreenTriangleFragmentShader);
+    auto simpleProgramPipeline = CreateGraphicsProgramPipeline("SimplePipeline", simpleVertexShader, simpleFragmentShader);
+    auto simpleDebugProgramPipeline = CreateGraphicsProgramPipeline("SimpleDebugPipeline", simpleVertexShader, simpleDebugFragmentShader);
+    g_fullscreenTrianglePipeline = CreateGraphicsProgramPipeline("FST", fullscreenTriangleVertexShader, fullscreenTriangleFragmentShader);
 
     SGlobalUniforms globalUniforms = {
         .ProjectionMatrix = glm::perspectiveFovRH_ZO(glm::radians(60.0f), (float)g_framebufferSize.x, (float)g_framebufferSize.x, 0.1f, 1024.0f),
@@ -1059,7 +1047,13 @@ auto main() -> int32_t {
         return -10;
     }
 
-    g_fullscreenSamplerNearestNearestClampToEdge = CreateTextureSampler();
+    g_fullscreenSamplerNearestNearestClampToEdge = GetOrCreateSampler(SSamplerData{
+        .Name = 0,
+        .MinFilter = GL_NEAREST,        
+        .MagFilter = GL_NEAREST,
+        .WrapS = GL_REPEAT,
+        .WrapT = GL_REPEAT,
+    });
     glCreateVertexArrays(1, &g_defaultInputLayout);
     SetDebugLabel(g_defaultInputLayout, GL_VERTEX_ARRAY, "InputLayout_Empty");
     glBindVertexArray(g_defaultInputLayout);
@@ -1133,12 +1127,20 @@ auto main() -> int32_t {
     g_baseTextureIndex = g_textures.size();
     g_lastMaterialIndex = g_materials.size();
     */
-        
+        /*
     AddModelFromFile(
         "SM_Complex",
         "data/default/SM_Deccer_Cubes_Textured_Complex.gltf",
         megaVertexBuffer,
         megaIndexBuffer);
+        */
+        /*
+    AddModelFromFile(
+        "SM_Beams",
+        "data/default/SM_Beams_01.glb",
+        megaVertexBuffer,
+        megaIndexBuffer);
+    */
         /*
     AddModelFromFile(
         "SM_Complex_Embedded",
@@ -1146,13 +1148,13 @@ auto main() -> int32_t {
         megaVertexBuffer,
         megaIndexBuffer);
         */
-       /*
+       
     AddModelFromFile(
-        "SM_Complex_Textured_External",
+        "SM_Complex",
         "data/default/SM_Deccer_Cubes_Textured.gltf",
         megaVertexBuffer,
         megaIndexBuffer);
-        */
+        
         /*
     AddModelFromFile(
         "Yargle",
@@ -1170,11 +1172,21 @@ auto main() -> int32_t {
         glNamedBufferSubData(cpuMaterialBuffer, sizeof(SCpuMaterial) * materialIndex, sizeof(SGpuMaterial), &cpuMaterial);
         auto gpuMaterial = SGpuMaterial{
             .BaseColor = cpuMaterial.BaseColor,
-            .BaseTextureHandle = g_textureHandles[cpuMaterial.BaseTextureIndex],
-            .NormalTextureHandle = g_textureHandles[cpuMaterial.NormalTextureIndex],
-            .OcclusionTextureHandle = g_textureHandles[cpuMaterial.OcclusionTextureIndex],
-            .MetallicRoughnessTextureHandle = g_textureHandles[cpuMaterial.MetallicRoughnessTextureIndex],
-            .EmissiveTextureHandle = g_textureHandles[cpuMaterial.EmissiveTextureIndex],
+            .BaseTextureHandle = cpuMaterial.BaseTextureIndex.has_value()
+                ? g_textureHandles[cpuMaterial.BaseTextureIndex.value()]
+                : 0,
+            .NormalTextureHandle = cpuMaterial.NormalTextureIndex.has_value()
+                ? g_textureHandles[cpuMaterial.NormalTextureIndex.value()]
+                : 0,
+            .OcclusionTextureHandle = cpuMaterial.OcclusionTextureIndex.has_value()
+                ? g_textureHandles[cpuMaterial.OcclusionTextureIndex.value()]
+                : 0,
+            .MetallicRoughnessTextureHandle = cpuMaterial.MetallicRoughnessTextureIndex.has_value()
+                ? g_textureHandles[cpuMaterial.MetallicRoughnessTextureIndex.value()]
+                : 0,
+            .EmissiveTextureHandle = cpuMaterial.EmissiveTextureIndex.has_value()
+                ? g_textureHandles[cpuMaterial.EmissiveTextureIndex.value()]
+                : 0,
             ._padding1 = 0,
         };
         glNamedBufferSubData(gpuMaterialBuffer, sizeof(SGpuMaterial) * materialIndex, sizeof(SGpuMaterial), &gpuMaterial);
@@ -1192,10 +1204,10 @@ auto main() -> int32_t {
         glNamedBufferSubData(objectBuffer, sizeof(SObject) * meshIndex, sizeof(SObject), &object);
 
         SDrawElementCommand drawElementCommand = {
-            .IndexCount = mesh.IndexCount,
+            .IndexCount = static_cast<uint32_t>(mesh.IndexCount),
             .InstanceCount = 1,
-            .FirstIndex = mesh.IndexOffset,
-            .BaseVertex = mesh.VertexOffset,
+            .FirstIndex = static_cast<uint32_t>(mesh.IndexOffset),
+            .BaseVertex = static_cast<int32_t>(mesh.VertexOffset),
             .BaseInstance = 0
         };
         glNamedBufferSubData(objectIndirectBuffer, sizeof(SDrawElementCommand) * meshIndex, sizeof(SDrawElementCommand), &drawElementCommand);
@@ -1333,7 +1345,7 @@ auto main() -> int32_t {
 
         auto isOpen = true;
         ImGui::SetNextWindowPos({32, 32});
-        ImGui::SetNextWindowSize({192, 128});
+        ImGui::SetNextWindowSize({256, 192});
         if (ImGui::Begin("Huhu", &isOpen, ImGuiWindowFlags_::ImGuiWindowFlags_Modal | ImGuiWindowFlags_::ImGuiWindowFlags_NoDecoration)) {
 
             ImGui::TextColored(ImVec4{0.6f, 0.1f, 0.8f, 1.0f}, "Press F1 to toggle editor");
@@ -1389,6 +1401,7 @@ auto main() -> int32_t {
             }
             ImGui::End();
 
+/*
             if (ImGui::Begin("Materials")) {
                 auto availableSceneWindowSize = ImVec2{64, 64};
                 for ( auto materialIndex = 0; auto& cpuMaterial : g_cpuMaterials) {
@@ -1417,6 +1430,7 @@ auto main() -> int32_t {
                 }
             }
             ImGui::End();
+            */
 
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
             if (ImGui::Begin("Scene")) {
@@ -1457,7 +1471,7 @@ auto main() -> int32_t {
         }
 
         glfwSwapBuffers(g_window);
-        glfwPollEvents();        
+        glfwPollEvents();
 
         frameCounter++;
         if ((frameCounter % 2000) == 0) {
@@ -1485,8 +1499,6 @@ auto main() -> int32_t {
 
     glDeleteFramebuffers(1, &mainFramebuffer);
 
-    glDeleteBuffers(1, &vertexBuffer);
-    glDeleteBuffers(1, &indexBuffer);
     glDeleteBuffers(1, &objectBuffer);
 
     glDeleteVertexArrays(1, &g_defaultInputLayout);
