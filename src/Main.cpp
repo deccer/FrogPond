@@ -1170,13 +1170,13 @@ auto main() -> int32_t {
         megaVertexBuffer,
         megaIndexBuffer);
         */
-       
+
     AddModelFromFile(
         "SM_Complex",
         "data/default/SM_Deccer_Cubes_Textured.gltf",
         megaVertexBuffer,
         megaIndexBuffer);
-        
+
 /*
     AddModelFromFile(
         "SM_Helmet",
