@@ -166,8 +166,9 @@ FetchContent_Declare(
 )
 
 set(TRACY_ENABLE ON CACHE BOOL "Enable profiling")
-set(TRACY_NO_SYSTEM_TRACING ON CACHE BOOL "Disable System Tracing")
+set(TRACY_NO_SYSTEM_TRACING OFF CACHE BOOL "Disable System Tracing")
 set(TRACY_ONLY_IPV4 ON CACHE BOOL "IPv4 only")
+set(TRACY_ONLY_LOCALHOST ON CACHE BOOL "Only Localhost")
 message("Fetching tracy")
 FetchContent_MakeAvailable(tracy)
 

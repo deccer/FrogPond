@@ -15,6 +15,7 @@ add_custom_target(copy_data ALL COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMA
 
 add_executable(FrogPond
         Main.cpp
+        ImGuiThemes.cpp
 )
 
 target_link_libraries(FrogPond PRIVATE debugbreak glfw glad glm spdlog imgui implot meshoptimizer ktx fastgltf stb TracyClient tbb poolSTL::poolSTL)

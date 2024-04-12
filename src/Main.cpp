@@ -42,6 +42,7 @@
 #include <fastgltf/types.hpp>
 
 #include <tracy/Tracy.hpp>
+#include <tracy/TracyOpenGL.hpp>
 
 #include <debugbreak.h>
 #if USE_LILLYPAD
@@ -54,6 +55,8 @@
 #include <execution>
 #define POOLSTL_STD_SUPPLEMENT
 #include <poolstl/poolstl.hpp>
+
+#include "ImGuiThemes.hpp"
 
 enum class EWindowStyle {
     Windowed,
@@ -236,6 +239,9 @@ std::vector<uint32_t> g_textures;
 std::vector<uint64_t> g_textureHandles;
 std::unordered_map<uint32_t, size_t> g_samplerNameToSamplerIndexMap;
 std::vector<uint32_t> g_samplers;
+
+uint32_t g_iconPackage = 0;
+uint32_t g_iconPackageGreen = 0;
 
 bool g_gpuMaterialsNeedUpdate = true;
 
@@ -955,13 +961,61 @@ auto main() -> int32_t {
         glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
     }
 
+    TracyGpuContext;
+
+    int32_t iconWidth = 0;
+    int32_t iconHeight = 0;
+    int32_t iconComponents = 0;
+    glCreateTextures(GL_TEXTURE_2D, 1, &g_iconPackage);
+    glTextureStorage2D(g_iconPackage, 1, GL_RGBA8, 16, 16);
+    auto iconFile = fopen("data/icons/package.png", "rb");
+    auto iconPixels = stbi_load_from_file(iconFile, &iconWidth, &iconHeight, &iconComponents, 4);
+    if (iconPixels != nullptr) {
+        glTextureSubImage2D(g_iconPackage, 0, 0, 0, 16, 16, GL_RGBA, GL_UNSIGNED_BYTE, iconPixels);
+        stbi_image_free(iconPixels);
+    }
+    fclose(iconFile);
+
+    glCreateTextures(GL_TEXTURE_2D, 1, &g_iconPackageGreen);
+    glTextureStorage2D(g_iconPackageGreen, 1, GL_RGBA8, 16, 16);
+    iconFile = fopen("data/icons/package_green.png", "rb");
+    iconPixels = stbi_load_from_file(iconFile, &iconWidth, &iconHeight, &iconComponents, 4);
+    if (iconPixels != nullptr) {
+        glTextureSubImage2D(g_iconPackageGreen, 0, 0, 0, 16, 16, GL_RGBA, GL_UNSIGNED_BYTE, iconPixels);
+        stbi_image_free(iconPixels);
+    }
+    fclose(iconFile);
+
     g_imguiContext = ImGui::CreateContext();
     g_implotContext = ImPlot::CreateContext();
     auto& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_IsSRGB;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+
+/*
+    io.Fonts->ClearFonts();
+    io.Fonts->AddFontFromFileTTF("data/fonts/RobotoCondensed-Light.ttf", 18.0f);
+    io.Fonts->AddFontFromFileTTF("data/fonts/segoeui.ttf", 18.0f);
+    io.Fonts->Build();
+*/
+
     ImGui::StyleColorsDark();
+    //SetGreenColorStyle();
+    //SetGrayColorStyle();
+    //SetDarkColorStyle();
+    //SetDarkerColorStyle();
+    //SetLightGrayColorStyle();
+    //SetLightColorStyle();
+    //SetJanekbDarknessColorStyle();
+    //SetIntelRealSenseColorStyle();
+    //SetAdobeSpectrumDarkColorStyle();
+    //SetAdobeSpectrumLightColorStyle();
+    SetDraculaColorStyle();
+    //SetBrightWhiteColorStyle();
+    //SetPurpleDertsehaColorStyle();
+    //SetInochiDarkColorStyle();
+    //SetHedgeGIColorStyle();
 
     if (!ImGui_ImplGlfw_InitForOpenGL(g_window, true)) {
         spdlog::error("Unable to Init ImGui's GLFW Backend");
@@ -1149,67 +1203,68 @@ auto main() -> int32_t {
     g_baseTextureIndex = g_textures.size();
     g_lastMaterialIndex = g_materials.size();
     */
-        /*
+
+/*
     AddModelFromFile(
-        "SM_Complex",
+        "SM_Model",
         "data/default/SM_Deccer_Cubes_Textured_Complex.gltf",
         megaVertexBuffer,
         megaIndexBuffer);
-        */
-        /*
+*/
+/*
     AddModelFromFile(
-        "SM_Beams",
+        "SM_Model",
         "data/default/SM_Beams_01.glb",
         megaVertexBuffer,
         megaIndexBuffer);
-    */
-        /*
+*/
+/*
     AddModelFromFile(
-        "SM_Complex_Embedded",
+        "SM_Model",
         "data/default/SM_Deccer_Cubes_Textured_Embedded.gltf",
         megaVertexBuffer,
         megaIndexBuffer);
-        */
+*/
 
     AddModelFromFile(
-        "SM_Complex",
+        "SM_Model",
         "data/default/SM_Deccer_Cubes_Textured.gltf",
         megaVertexBuffer,
         megaIndexBuffer);
 
 /*
     AddModelFromFile(
-        "SM_Helmet",
+        "SM_Model",
         "data/scenes/DamagedHelmet/DamagedHelmet.gltf",
         megaVertexBuffer,
         megaIndexBuffer);
 */
 /*
     AddModelFromFile(
-        "SM_Bistro",
+        "SM_Model",
         "data/scenes/Bistro52/scene.gltf",
         megaVertexBuffer,
         megaIndexBuffer);
 */
 /*
     AddModelFromFile(
-        "SM_Tower",
+        "SM_Model",
         "data/scenes/Tower/scene.gltf",
         megaVertexBuffer,
         megaIndexBuffer);
 */         
-        
-        /*
+/*
     AddModelFromFile(
-        "Yargle",
+        "SM_Model",
         "data/default/mira_up/scene.gltf",
         megaVertexBuffer,
         megaIndexBuffer);
-        */
+*/
 
-    auto& meshNames = g_modelToPrimitiveMap["SM_Complex"];
+    auto& meshNames = g_modelToPrimitiveMap["SM_Model"];
 
-    // prepare material buffer, instance and indirect draw buffer
+    // prepare material buffer, in this instance its update per material, cpu materials should be transformed into gpu materials
+    // and gpumaterials uploaded to gpu at once, rather than one after another
 
     for (auto materialIndex = 0; auto& cpuMaterial : g_cpuMaterials) {
 
@@ -1272,7 +1327,9 @@ auto main() -> int32_t {
     auto accumulatedTimeInSeconds = 0.0;
     while (!glfwWindowShouldClose(g_window)) {
 
-        ZoneScopedN("Render");
+        //ZoneScopedN("Render");
+        TracyGpuZone("Render");
+
         auto currentTimeInSeconds = glfwGetTime();
         auto deltaTimeInSeconds = currentTimeInSeconds - previousTimeInSeconds;
         accumulatedTimeInSeconds += deltaTimeInSeconds;
@@ -1447,7 +1504,51 @@ auto main() -> int32_t {
             }
             ImGui::End();
 
+            if (!g_modelToPrimitiveMap.empty()) {
+                if (ImGui::Begin("Assets")) {
+                    if (ImGui::BeginTable("Models", 2, ImGuiTableFlags_::ImGuiTableFlags_RowBg)) {
+                        
+                        ImGui::TableSetupColumn("Model", ImGuiTableColumnFlags_NoSort);
+                        ImGui::TableSetupColumn("Add", ImGuiTableColumnFlags_NoSort | ImGuiTableColumnFlags_WidthFixed, 32);
+                        ImGui::TableHeadersRow();
 
+                        for (auto& modelToPrimitive : g_modelToPrimitiveMap) {
+                            ImGui::TableNextRow();
+                            ImGui::PushID(static_cast<int32_t>(std::hash<std::string>{}(modelToPrimitive.first)));
+                            ImGui::TableSetColumnIndex(0);
+                            ImGui::Image(reinterpret_cast<ImTextureID>(g_iconPackage), ImVec2{16, 16}, g_imvec2UnitY, g_imvec2UnitX);
+                            ImGui::SameLine();
+                            auto isExpanded = ImGui::TreeNodeEx(modelToPrimitive.first.data());
+
+                            ImGui::TableSetColumnIndex(1);
+                            if (ImGui::Button("Add")) {
+                                // add model (and its primitives)
+                            }
+
+                            if (isExpanded) {
+                                for (auto& primitive : modelToPrimitive.second) {
+                                    ImGui::TableNextRow();
+                                    ImGui::TableSetColumnIndex(0);
+                                    ImGui::Image(reinterpret_cast<ImTextureID>(g_iconPackageGreen), ImVec2{32, 32}, g_imvec2UnitY, g_imvec2UnitX);
+                                    ImGui::SameLine();
+                                    ImGui::TextUnformatted(primitive.data());
+                                    ImGui::TableSetColumnIndex(1);
+                                    if (ImGui::Button("Add")) {
+                                        // add primitive
+                                    }
+                                }
+
+                                ImGui::TreePop();
+                            }
+
+                            ImGui::PopID();
+                        }
+
+                        ImGui::EndTable();
+                    }
+                }
+                ImGui::End();
+            }
             if (!g_cpuMaterials.empty()) {
                 if (ImGui::Begin("Materials")) {
                     auto textureSize = ImVec2{32, 32};
@@ -1534,8 +1635,23 @@ auto main() -> int32_t {
                     ? mainAlbedoTexture
                     : mainNormalTexture;
                 ImGui::Image(reinterpret_cast<ImTextureID>(texture), availableSceneWindowSize, g_imvec2UnitY, g_imvec2UnitX);
+
+                bool isOpen = true;
+                
+                ImGui::Begin("#StatisticsOverlay", &isOpen, ImGuiWindowFlags_::ImGuiWindowFlags_Modal | ImGuiWindowFlags_::ImGuiWindowFlags_NoDecoration);
+                auto windowPos = ImGui::GetWindowPos();
+                ImGui::SetWindowPos(windowPos);
+                if (ImGui::CollapsingHeader("Statistics")) {
+                    ImGui::Text("Text");
+                }
+                ImGui::End();
             }
             ImGui::PopStyleVar();
+            ImGui::End();
+
+            if (ImGui::Begin("ImGui")) {
+                ImGui::ShowStyleEditor(nullptr);
+            }
             ImGui::End();
         } else {
 
@@ -1560,7 +1676,11 @@ auto main() -> int32_t {
             PopDebugGroup();            
         }
 
-        glfwSwapBuffers(g_window);
+        {
+            ZoneScopedN("SwapBuffers");
+            glfwSwapBuffers(g_window);
+        }
+
         glfwPollEvents();
 
         frameCounter++;
@@ -1569,6 +1689,9 @@ auto main() -> int32_t {
             UpdateGpuInformation(0, &gpuInformation);
 #endif
         }
+
+        TracyGpuCollect;
+        FrameMark;        
     }
 
     glDeleteSamplers(1, &g_fullscreenSamplerNearestNearestClampToEdge);
