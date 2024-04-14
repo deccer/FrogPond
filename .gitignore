@@ -400,3 +400,6 @@ FodyWeavers.xsd
 # CMake
 build/
 .idea/
+
+# ignore large asset files usually put into data/scenes
+data/scenes/
