@@ -9,6 +9,8 @@
 #include <glm/gtc/matrix_access.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtc/color_space.hpp>
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/string_cast.hpp>
 
 #include <vector>
 #include <unordered_map>
@@ -111,14 +113,6 @@ struct SObject {
     glm::ivec4 InstanceParameter;
 };
 
-struct SMesh {
-    size_t VertexCount;
-    size_t VertexOffset;
-    size_t IndexCount;
-    size_t IndexOffset;
-    uint32_t MaterialIndex;
-};
-
 struct SCpuMaterial {
     std::string Name;
     std::optional<size_t> BaseTextureIndex;
@@ -148,7 +142,7 @@ struct alignas(4) SDebugOptions {
     int ShowMaterialId;
 };
 
-struct SDrawElementCommand {
+struct SGpuPooledPrimitive {
     uint32_t IndexCount;
     uint32_t InstanceCount;
     uint32_t FirstIndex;
@@ -197,6 +191,33 @@ struct SSamplerData {
     uint32_t WrapT;
 };
 
+struct SCpuPooledMaterial {
+    size_t MaterialIndex;
+};
+
+struct SCpuPooledPrimitive {
+    size_t VertexCount;
+    size_t VertexOffset;
+    size_t IndexCount;
+    size_t IndexOffset;
+};
+
+struct SPrimitive {
+    SCpuPooledPrimitive Primitive;
+    SCpuPooledMaterial Material;
+};
+
+struct SModelMesh {
+    std::string Name;
+    glm::mat4 WorldMatrix;
+    std::vector<SPrimitive> Primitives;
+};
+
+struct SModel {
+    std::string Name;
+    std::vector<SModelMesh> Meshes;
+};
+
 constexpr ImVec2 g_imvec2UnitX = ImVec2(1, 0);
 constexpr ImVec2 g_imvec2UnitY = ImVec2(0, 1);
 
@@ -228,9 +249,11 @@ uint32_t g_lastIndexOffset = 0;
 SDebugOptions g_debugOptions = {};
 bool g_debugShowMaterialId = false;
 
-std::unordered_map<std::string, std::vector<std::string>> g_modelToPrimitiveMap;
-std::unordered_map<std::string, SMesh> g_primitiveToMeshMap;
+std::unordered_map<std::string, SModel> g_modelNameToModelMap;
+std::unordered_map<std::string, SCpuPooledPrimitive> g_primitiveToMeshMap;
 std::unordered_map<std::string, glm::mat4x4> g_primitiveToInitialTransformMap;
+
+std::unordered_map<size_t, std::vector<SCpuPooledPrimitive>> g_meshIndexToPrimitivesMap;
 
 std::unordered_map<std::string, size_t> g_primitiveNameToMaterialIdMap;
 std::vector<SGpuMaterial> g_gpuMaterials;
@@ -491,7 +514,7 @@ auto inline CreateBuffer(
     return buffer;
 }
 
-auto NodeToMatrix4x4(const fastgltf::Node& node) -> glm::mat4 {
+auto GetLocalTransform(const fastgltf::Node& node) -> glm::mat4 {
 
     glm::mat4 transform{1.0};
 
@@ -509,15 +532,7 @@ auto NodeToMatrix4x4(const fastgltf::Node& node) -> glm::mat4 {
     else if (auto* mat = std::get_if<fastgltf::Node::TransformMatrix>(&node.transform))
     {
         const auto& m = *mat;
-        // clang-format off
-        transform =
-        { 
-            m[0], m[1], m[2], m[3], 
-            m[4], m[5], m[6], m[7], 
-            m[8], m[9], m[10], m[11], 
-            m[12], m[13], m[14], m[15],
-        };
-        // clang-format on
+        transform = glm::make_mat4x4(m.data());
     }
 
     return transform;
@@ -615,19 +630,58 @@ auto BitfieldExtract(int32_t a, int32_t b, int32_t c) -> int32_t
     return a & mask;
 }
 
+auto GetPooledMaterial(
+    uint32_t megaMaterialBuffer,
+    uint32_t materialIndex) -> SCpuPooledMaterial {
+    
+    SCpuPooledMaterial pooledMaterial {
+        .MaterialIndex = materialIndex
+    };
+    return std::move(pooledMaterial);
+}
+
+auto GetPooledPrimitive(
+    uint32_t megaVertexBuffer,
+    uint32_t megaIndexBuffer,
+    const fastgltf::Asset& fgAsset,
+    const fastgltf::Primitive& fgPrimitive) -> SCpuPooledPrimitive {
+
+    auto vertices = GetVertices(fgAsset, fgPrimitive);
+    auto indices = GetIndices(fgAsset, fgPrimitive);
+
+    SCpuPooledPrimitive pooledPrimitive = {
+        .VertexCount = vertices.size(),
+        .VertexOffset = g_lastVertexOffset,
+        .IndexCount = indices.size(),
+        .IndexOffset = g_lastIndexOffset,
+    };
+
+    auto verticesSizeInBytes = sizeof(SVertexPositionNormalUv) * vertices.size();
+    auto indicesSizeInBytes = sizeof(uint32_t) * indices.size();
+
+    glNamedBufferSubData(megaVertexBuffer, g_lastVertexOffset * sizeof(SVertexPositionNormalUv), verticesSizeInBytes, vertices.data());
+    glNamedBufferSubData(megaIndexBuffer, g_lastIndexOffset * sizeof(uint32_t), indicesSizeInBytes, indices.data());
+
+    g_lastVertexOffset += vertices.size();
+    g_lastIndexOffset += indices.size();
+
+    return std::move(pooledPrimitive);
+}
+
 auto AddModelFromFile(
     const std::string& modelName,
     std::filesystem::path filePath,
     const uint32_t megaVertexBuffer,
-    const uint32_t megaIndexBuffer) -> void {
+    const uint32_t megaIndexBuffer,
+    const uint32_t megaMaterialBuffer) -> void {
 
     ZoneScoped;
-    if (g_modelToPrimitiveMap.contains(modelName))
+    if (g_modelNameToModelMap.contains(modelName))
     {
         return;
     }
 
-    auto& meshNames = g_modelToPrimitiveMap[modelName];
+    SModel model = {};
     
     fastgltf::Parser parser(fastgltf::Extensions::KHR_mesh_quantization);
 
@@ -769,7 +823,8 @@ auto AddModelFromFile(
         glMakeTextureHandleResidentARB(textureHandle);
 
         g_textures.push_back(textureId);
-        g_textureHandles.push_back(textureHandle);        
+        //g_textureHandles.push_back(textureId);
+        g_textureHandles.push_back(textureHandle);
     }
 
     for (auto& fgMaterial : fgAsset.materials) {
@@ -801,6 +856,8 @@ auto AddModelFromFile(
     std::stack<std::pair<const fastgltf::Node*, glm::mat4>> nodeStack;
     glm::mat4 rootTransform = glm::mat4(1.0f);
 
+    model.Name = filePath.string();
+
     for (auto nodeIndex : fgAsset.scenes[0].nodeIndices)
     {
         nodeStack.emplace(&fgAsset.nodes[nodeIndex], rootTransform);
@@ -809,64 +866,59 @@ auto AddModelFromFile(
     while (!nodeStack.empty())
     {
         decltype(nodeStack)::value_type top = nodeStack.top();
-        const auto& [node, parentGlobalTransform] = top;
+        const auto& [fgNode, parentGlobalTransform] = top;
         nodeStack.pop();
 
-        glm::mat4 localTransform = NodeToMatrix4x4(*node);
+        glm::mat4 localTransform = GetLocalTransform(*fgNode);
         glm::mat4 globalTransform = parentGlobalTransform * localTransform;
 
-        for (auto childNodeIndex : node->children)
+        for (auto childNodeIndex : fgNode->children)
         {
             nodeStack.emplace(&fgAsset.nodes[childNodeIndex], globalTransform);
         }
 
-        if (node->meshIndex.has_value())
-        {
-            for (const fastgltf::Mesh& fgMesh = fgAsset.meshes[node->meshIndex.value()];
-                 const auto& primitive : fgMesh.primitives)
-            {
-                ZoneScopedN("LoadPrimitive");
-                ZoneName(fgMesh.name.c_str(), fgMesh.name.size());
-
-                if (g_primitiveToMeshMap.contains(fgMesh.name.data()))
-                {
-                    continue;
-                }
-                std::string primitiveName = std::string(fgMesh.name);
-
-                const auto materialIndex = primitive.materialIndex.has_value()
-                    ? primitive.materialIndex.value()
-                    : 0;
-
-                meshNames.emplace_back(primitiveName);
-                g_primitiveNameToMaterialIdMap.insert({primitiveName, materialIndex});
-
-                auto vertices = GetVertices(fgAsset, primitive);
-                auto indices = GetIndices(fgAsset, primitive);
-
-                SMesh mesh = {
-                    .VertexCount = vertices.size(),
-                    .VertexOffset = g_lastVertexOffset,
-                    .IndexCount = indices.size(),
-                    .IndexOffset = g_lastIndexOffset,
-                    .MaterialIndex = static_cast<uint32_t>(materialIndex),
-                };
-
-                g_primitiveToMeshMap.insert({primitiveName, mesh});
-
-                auto verticesSizeInBytes = sizeof(SVertexPositionNormalUv) * vertices.size();
-                auto indicesSizeInBytes = sizeof(uint32_t) * indices.size();
-
-                glNamedBufferSubData(megaVertexBuffer, g_lastVertexOffset * sizeof(SVertexPositionNormalUv), verticesSizeInBytes, vertices.data());
-                glNamedBufferSubData(megaIndexBuffer, g_lastIndexOffset * sizeof(uint32_t), indicesSizeInBytes, indices.data());
-
-                g_lastVertexOffset += vertices.size();
-                g_lastIndexOffset += indices.size();
-
-                g_primitiveToInitialTransformMap.insert({primitiveName, globalTransform});
-            }
+        if (!fgNode->meshIndex.has_value()) {
+            continue;
         }
+
+        auto meshIndex = fgNode->meshIndex.value();
+        auto& fgMesh = fgAsset.meshes[meshIndex];
+        auto meshName = std::string(fgMesh.name);
+
+        auto modelMesh = SModelMesh{
+            .Name = std::move(meshName),
+            .WorldMatrix = std::move(globalTransform)
+        };
+
+        for (const auto& fgPrimitive : fgMesh.primitives)
+        {
+            ZoneScopedN("LoadPrimitive");
+            ZoneName(fgMesh.name.data(), fgMesh.name.size());
+
+            const auto primitiveMaterialIndex = fgPrimitive.materialIndex.has_value()
+                ? fgPrimitive.materialIndex.value()
+                : 0;
+
+            auto pooledPrimitive = GetPooledPrimitive(
+                megaVertexBuffer,
+                megaIndexBuffer,
+                fgAsset,
+                fgPrimitive);
+            auto pooledMaterial = GetPooledMaterial(
+                megaMaterialBuffer,
+                primitiveMaterialIndex
+            );
+            auto primitive = SPrimitive{
+                .Primitive = std::move(pooledPrimitive),
+                .Material = std::move(pooledMaterial)
+            };
+            modelMesh.Primitives.push_back(std::move(primitive));
+        }
+
+        model.Meshes.push_back(std::move(modelMesh));
     }
+
+    g_modelNameToModelMap.insert({modelName, std::move(model)});
 }
 
 auto main() -> int32_t {
@@ -1142,13 +1194,17 @@ auto main() -> int32_t {
     glCreateBuffers(1, &megaIndexBuffer);
     glNamedBufferStorage(megaIndexBuffer, 768000000, nullptr, GL_DYNAMIC_STORAGE_BIT);
 
+    uint32_t megaMaterialBuffer = 0;
+    glCreateBuffers(1, &megaMaterialBuffer);
+    glNamedBufferStorage(megaMaterialBuffer, sizeof(SGpuMaterial) * 512, nullptr, GL_DYNAMIC_STORAGE_BIT);
+
     uint32_t objectBuffer = 0;
     glCreateBuffers(1, &objectBuffer);
-    glNamedBufferStorage(objectBuffer, sizeof(SObject) * 16384, nullptr, GL_DYNAMIC_STORAGE_BIT);
+    glNamedBufferStorage(objectBuffer, sizeof(SObject) * 65536, nullptr, GL_DYNAMIC_STORAGE_BIT);
 
     uint32_t objectIndirectBuffer = 0;
     glCreateBuffers(1, &objectIndirectBuffer);
-    glNamedBufferStorage(objectIndirectBuffer, sizeof(SDrawElementCommand) * 16384, nullptr, GL_DYNAMIC_STORAGE_BIT);
+    glNamedBufferStorage(objectIndirectBuffer, sizeof(SGpuPooledPrimitive) * 65536, nullptr, GL_DYNAMIC_STORAGE_BIT);
 
     uint32_t gpuMaterialBuffer = 0;
     glCreateBuffers(1, &gpuMaterialBuffer);
@@ -1230,7 +1286,8 @@ auto main() -> int32_t {
         "SM_Model",
         "data/default/SM_Deccer_Cubes_Textured.gltf",
         megaVertexBuffer,
-        megaIndexBuffer);
+        megaIndexBuffer,
+        megaMaterialBuffer);
 
 /*
     AddModelFromFile(
@@ -1244,15 +1301,25 @@ auto main() -> int32_t {
         "SM_Model",
         "data/scenes/Bistro52/scene.gltf",
         megaVertexBuffer,
-        megaIndexBuffer);
+        megaIndexBuffer,
+        megaMaterialBuffer);
 */
 /*
     AddModelFromFile(
         "SM_Model",
         "data/scenes/Tower/scene.gltf",
         megaVertexBuffer,
-        megaIndexBuffer);
-*/         
+        megaIndexBuffer,
+        megaMaterialBuffer);
+*/      
+/*
+    AddModelFromFile(
+        "SM_Model",
+        "data/scenes/IntelSponza/NewSponza_Main_glTF_002.gltf",
+        megaVertexBuffer,
+        megaIndexBuffer,
+        megaMaterialBuffer);
+*/ 
 /*
     AddModelFromFile(
         "SM_Model",
@@ -1261,7 +1328,7 @@ auto main() -> int32_t {
         megaIndexBuffer);
 */
 
-    auto& meshNames = g_modelToPrimitiveMap["SM_Model"];
+    auto model = g_modelNameToModelMap["SM_Model"];
 
     // prepare material buffer, in this instance its update per material, cpu materials should be transformed into gpu materials
     // and gpumaterials uploaded to gpu at once, rather than one after another
@@ -1292,25 +1359,29 @@ auto main() -> int32_t {
         materialIndex++;
     }
 
-    for (auto meshIndex = 0; auto& meshName : meshNames) {
+    auto primitiveCount = 0;
+    for (auto meshIndex = 0; auto mesh : model.Meshes) {
 
-        auto& mesh = g_primitiveToMeshMap[meshName];
-        auto& transform = g_primitiveToInitialTransformMap[meshName];
+        auto transform = mesh.WorldMatrix;
+        for (auto primitiveIndex = 0; auto primitive : mesh.Primitives) {
 
-        SObject object = {
-            .WorldMatrix = glm::scale(glm::mat4(1.0f), glm::vec3(1.0f)) * transform,
-            .InstanceParameter = glm::ivec4(mesh.MaterialIndex, 0, 0, 0)
-        };
-        glNamedBufferSubData(objectBuffer, sizeof(SObject) * meshIndex, sizeof(SObject), &object);
+            SObject object = {
+                .WorldMatrix = glm::scale(glm::mat4(1.0f), glm::vec3(1.0f)) * transform,
+                .InstanceParameter = glm::ivec4(primitive.Material.MaterialIndex, 0, 0, 0)
+            };
+            glNamedBufferSubData(objectBuffer, sizeof(SObject) * primitiveCount, sizeof(SObject), &object);
 
-        SDrawElementCommand drawElementCommand = {
-            .IndexCount = static_cast<uint32_t>(mesh.IndexCount),
-            .InstanceCount = 1,
-            .FirstIndex = static_cast<uint32_t>(mesh.IndexOffset),
-            .BaseVertex = static_cast<int32_t>(mesh.VertexOffset),
-            .BaseInstance = 0
-        };
-        glNamedBufferSubData(objectIndirectBuffer, sizeof(SDrawElementCommand) * meshIndex, sizeof(SDrawElementCommand), &drawElementCommand);
+            SGpuPooledPrimitive gpuPooledPrimitive = {
+                .IndexCount = static_cast<uint32_t>(primitive.Primitive.IndexCount),
+                .InstanceCount = 1,
+                .FirstIndex = static_cast<uint32_t>(primitive.Primitive.IndexOffset),
+                .BaseVertex = static_cast<int32_t>(primitive.Primitive.VertexOffset),
+                .BaseInstance = 0
+            };
+            glNamedBufferSubData(objectIndirectBuffer, sizeof(SGpuPooledPrimitive) * primitiveCount, sizeof(SGpuPooledPrimitive), &gpuPooledPrimitive);
+            primitiveIndex++;
+            primitiveCount++;
+        }
 
         meshIndex++;
     }
@@ -1429,7 +1500,7 @@ auto main() -> int32_t {
         }
 
         glBindBuffer(GL_DRAW_INDIRECT_BUFFER, objectIndirectBuffer);
-        glMultiDrawElementsIndirect(GL_TRIANGLES, GL_UNSIGNED_INT, nullptr, meshNames.size(), sizeof(SDrawElementCommand));
+        glMultiDrawElementsIndirect(GL_TRIANGLES, GL_UNSIGNED_INT, nullptr, primitiveCount, sizeof(SGpuPooledPrimitive));
 
         PopDebugGroup();
 
@@ -1504,7 +1575,7 @@ auto main() -> int32_t {
             }
             ImGui::End();
 
-            if (!g_modelToPrimitiveMap.empty()) {
+            if (!g_modelNameToModelMap.empty()) {
                 if (ImGui::Begin("Assets")) {
                     if (ImGui::BeginTable("Models", 2, ImGuiTableFlags_::ImGuiTableFlags_RowBg)) {
                         
@@ -1512,13 +1583,13 @@ auto main() -> int32_t {
                         ImGui::TableSetupColumn("Add", ImGuiTableColumnFlags_NoSort | ImGuiTableColumnFlags_WidthFixed, 32);
                         ImGui::TableHeadersRow();
 
-                        for (auto& modelToPrimitive : g_modelToPrimitiveMap) {
+                        for (auto& modelNameToModel : g_modelNameToModelMap) {
                             ImGui::TableNextRow();
-                            ImGui::PushID(static_cast<int32_t>(std::hash<std::string>{}(modelToPrimitive.first)));
+                            ImGui::PushID(static_cast<int32_t>(std::hash<std::string>{}(modelNameToModel.first)));
                             ImGui::TableSetColumnIndex(0);
                             ImGui::Image(reinterpret_cast<ImTextureID>(g_iconPackage), ImVec2{16, 16}, g_imvec2UnitY, g_imvec2UnitX);
                             ImGui::SameLine();
-                            auto isExpanded = ImGui::TreeNodeEx(modelToPrimitive.first.data());
+                            auto isExpanded = ImGui::TreeNodeEx(modelNameToModel.first.data());
 
                             ImGui::TableSetColumnIndex(1);
                             if (ImGui::Button("Add")) {
@@ -1526,12 +1597,13 @@ auto main() -> int32_t {
                             }
 
                             if (isExpanded) {
-                                for (auto& primitive : modelToPrimitive.second) {
+                                std::vector<SModelMesh>& meshes = modelNameToModel.second.Meshes;
+                                for (auto& modelMesh : meshes) {
                                     ImGui::TableNextRow();
                                     ImGui::TableSetColumnIndex(0);
-                                    ImGui::Image(reinterpret_cast<ImTextureID>(g_iconPackageGreen), ImVec2{32, 32}, g_imvec2UnitY, g_imvec2UnitX);
+                                    ImGui::Image(reinterpret_cast<ImTextureID>(g_iconPackageGreen), ImVec2{16, 16}, g_imvec2UnitY, g_imvec2UnitX);
                                     ImGui::SameLine();
-                                    ImGui::TextUnformatted(primitive.data());
+                                    ImGui::TextUnformatted(modelMesh.Name.data());
                                     ImGui::TableSetColumnIndex(1);
                                     if (ImGui::Button("Add")) {
                                         // add primitive
@@ -1549,6 +1621,7 @@ auto main() -> int32_t {
                 }
                 ImGui::End();
             }
+
             if (!g_cpuMaterials.empty()) {
                 if (ImGui::Begin("Materials")) {
                     auto textureSize = ImVec2{32, 32};
@@ -1634,17 +1707,15 @@ auto main() -> int32_t {
                 auto texture = drawMainFramebufferIndex == 0
                     ? mainAlbedoTexture
                     : mainNormalTexture;
+                auto imagePosition = ImGui::GetCursorPos();
                 ImGui::Image(reinterpret_cast<ImTextureID>(texture), availableSceneWindowSize, g_imvec2UnitY, g_imvec2UnitX);
-
-                bool isOpen = true;
-                
-                ImGui::Begin("#StatisticsOverlay", &isOpen, ImGuiWindowFlags_::ImGuiWindowFlags_Modal | ImGuiWindowFlags_::ImGuiWindowFlags_NoDecoration);
-                auto windowPos = ImGui::GetWindowPos();
-                ImGui::SetWindowPos(windowPos);
-                if (ImGui::CollapsingHeader("Statistics")) {
-                    ImGui::Text("Text");
+                ImGui::SetCursorPos(imagePosition);
+                if (ImGui::BeginChild(1, ImVec2{192, -1})) {
+                    if (ImGui::CollapsingHeader("Statistics")) {
+                        ImGui::Text("Text");
+                    }
                 }
-                ImGui::End();
+                ImGui::EndChild();
             }
             ImGui::PopStyleVar();
             ImGui::End();
@@ -1667,15 +1738,14 @@ auto main() -> int32_t {
         }
 
         ImGui::Render();
-        auto* drawData = ImGui::GetDrawData();
-        if (drawData != nullptr) {
+        auto* imGuiDrawData = ImGui::GetDrawData();
+        if (imGuiDrawData != nullptr) {
             glDisable(GL_FRAMEBUFFER_SRGB);
             isSrgbDisabled = true;
             PushDebugGroup("UI");
-            ImGui_ImplOpenGL3_RenderDrawData(drawData);
+            ImGui_ImplOpenGL3_RenderDrawData(imGuiDrawData);
             PopDebugGroup();            
         }
-
         {
             ZoneScopedN("SwapBuffers");
             glfwSwapBuffers(g_window);
