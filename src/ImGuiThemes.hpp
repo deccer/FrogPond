@@ -15,3 +15,4 @@ auto SetBrightWhiteColorStyle() -> void;
 auto SetPurpleDertsehaColorStyle() -> void;
 auto SetInochiDarkColorStyle() -> void;
 auto SetHedgeGIColorStyle() -> void;
+auto SetEtfeOrangeColorStyle() -> void;
