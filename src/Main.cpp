@@ -452,7 +452,7 @@ auto GetOrCreateSampler(SSamplerData samplerData) -> uint32_t {
     return sampler;
 }
 
-auto DrawFullscreenTriangle(uint32_t texture) -> void {
+auto DrawFullscreenTriangleWithTexture(uint32_t texture) -> void {
     
     glBindProgramPipeline(g_fullscreenTrianglePipeline);
     glBindTextureUnit(0, texture);
@@ -1778,7 +1778,7 @@ auto main() -> int32_t {
 
             PushDebugGroup("Blit To UI");
             glViewport(0, 0, g_framebufferSize.x, g_framebufferSize.y);
-            DrawFullscreenTriangle(mainAlbedoTexture);
+            DrawFullscreenTriangleWithTexture(mainAlbedoTexture);
             PopDebugGroup();
 /*
             glBlitNamedFramebuffer(mainFramebuffer, 0,
