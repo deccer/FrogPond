@@ -91,7 +91,7 @@ struct SVertexPositionColor {
 };
 
 struct SGlobalUniforms {
-    /*
+/*
     glm::mat4 OldProjectionMatrix;
     glm::mat4 OldViewMatrix;
     glm::mat4 OldViewProjectionMatrix;
@@ -105,7 +105,12 @@ struct SGlobalUniforms {
     /*
     glm::vec4 FrustumPlanes[6];
     glm::vec4 Viewport;
-    */
+*/
+};
+
+struct SShadingUniforms {
+    glm::vec4 SunDirection;
+    glm::vec4 SunStrength;
 };
 
 struct SObject {
@@ -262,6 +267,11 @@ std::vector<uint32_t> g_textures;
 std::vector<uint64_t> g_textureHandles;
 std::unordered_map<uint32_t, size_t> g_samplerNameToSamplerIndexMap;
 std::vector<uint32_t> g_samplers;
+
+float g_sunElevation = 3.0f;
+float g_sunAzimuth = 0.3f;
+glm::vec3 g_sunColor = glm::vec3{1.0f, 1.0f, 1.0f};
+float g_sunStrength = 1.0f;
 
 uint32_t g_iconPackage = 0;
 uint32_t g_iconPackageGreen = 0;
@@ -666,6 +676,14 @@ auto GetPooledPrimitive(
     g_lastIndexOffset += indices.size();
 
     return std::move(pooledPrimitive);
+}
+
+inline auto PolarToCartesian(float elevation, float azimuth) -> glm::vec3 {
+    return {
+        std::sin(elevation) * std::cos(azimuth), 
+        std::cos(elevation),
+        std::sin(elevation) * std::sin(azimuth)
+    };
 }
 
 auto AddModelFromFile(
@@ -1134,10 +1152,16 @@ auto main() -> int32_t {
         .ProjectionMatrix = glm::infinitePerspectiveRH_ZO(glm::radians(60.0f), (float)g_framebufferSize.x / (float)g_framebufferSize.x, 0.1f),
         //.ProjectionMatrix = glm::perspectiveFovRH_ZO(glm::radians(60.0f), (float)g_framebufferSize.x, (float)g_framebufferSize.x, 0.1f, 1024.0f),
         .ViewMatrix = g_mainCamera.GetViewMatrix(),
-        .CameraPosition = glm::vec4(g_mainCamera.Position, 0.0f)
+        .CameraPosition = glm::vec4(g_mainCamera.Position, 0.0f),
     };
 
     auto globalUniformsBuffer = CreateBuffer("GlobalUniforms", sizeof(SGlobalUniforms), &globalUniforms, GL_DYNAMIC_DRAW);
+
+    SShadingUniforms shadingUniforms = {
+        .SunDirection = glm::vec4(PolarToCartesian(g_sunElevation, g_sunAzimuth), 0),
+        .SunStrength = glm::vec4{g_sunStrength * g_sunColor, 0}
+    };
+    auto shadingUniformsBuffer = CreateBuffer("ShadingUniforms", sizeof(SShadingUniforms), &shadingUniforms, GL_DYNAMIC_DRAW);
 
     auto CreateWorldMatrix = [](float x, float y, float z) {
         return glm::translate(glm::mat4x4(1.0f), glm::vec3(x, y, z));
@@ -1281,14 +1305,14 @@ auto main() -> int32_t {
         megaVertexBuffer,
         megaIndexBuffer);
 */
-
+/*
     AddModelFromFile(
         "SM_Model",
         "data/default/SM_Deccer_Cubes_Textured.gltf",
         megaVertexBuffer,
         megaIndexBuffer,
         megaMaterialBuffer);
-
+*/
 /*
     AddModelFromFile(
         "SM_Model",
@@ -1296,14 +1320,14 @@ auto main() -> int32_t {
         megaVertexBuffer,
         megaIndexBuffer);
 */
-/*
+
     AddModelFromFile(
         "SM_Model",
         "data/scenes/Bistro52/scene.gltf",
         megaVertexBuffer,
         megaIndexBuffer,
         megaMaterialBuffer);
-*/
+
 /*
     AddModelFromFile(
         "SM_Model",
@@ -1414,6 +1438,13 @@ auto main() -> int32_t {
         };
 
         glNamedBufferSubData(globalUniformsBuffer, 0, sizeof(SGlobalUniforms), &globalUniforms);
+
+        shadingUniforms = {
+            .SunDirection = glm::vec4(PolarToCartesian(g_sunElevation, g_sunAzimuth), 0),
+            .SunStrength = glm::vec4{g_sunStrength * g_sunColor, 0}
+        };
+        glNamedBufferSubData(shadingUniformsBuffer, 0, sizeof(SShadingUniforms), &shadingUniforms);
+
         glNamedBufferSubData(debugOptionsBuffer, 0, sizeof(SDebugOptions), &g_debugOptions);
 
         auto framebufferWasResized = false;
@@ -1422,7 +1453,7 @@ auto main() -> int32_t {
         if (g_sceneViewerResized || g_framebufferResized) {
 
             ZoneScopedN("Resize");
-            //glm::vec2 scaledFramebufferSize = glm::vec2{0.0f, 0.0f};
+
             if (g_isEditor) {
                 scaledFramebufferSize = glm::vec2(g_sceneViewerSize) * windowSettings.ResolutionScale;
                 g_sceneViewerResized = false;
@@ -1466,6 +1497,10 @@ auto main() -> int32_t {
 
         // Depth Pre Pass
 
+        // Shadow Pass
+
+        PushDebugGroup("ShadowPass");
+        PopDebugGroup();
 
         // GBuffer Pass
 
@@ -1493,6 +1528,7 @@ auto main() -> int32_t {
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, megaVertexBuffer);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, objectBuffer);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, gpuMaterialBuffer);
+        glBindBufferBase(GL_UNIFORM_BUFFER, 4, shadingUniformsBuffer);
 
         if (g_debugShowMaterialId) {
             //glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 19, cpuMaterialBuffer);
@@ -1517,28 +1553,37 @@ auto main() -> int32_t {
             ImGui::DockSpaceOverViewport(nullptr, ImGuiDockNodeFlags_PassthruCentralNode);
         }
 
-        auto isOpen = true;
-        ImGui::SetNextWindowPos({32, 32});
-        ImGui::SetNextWindowSize({256, 192});
-        if (ImGui::Begin("Huhu", &isOpen, ImGuiWindowFlags_::ImGuiWindowFlags_Modal | ImGuiWindowFlags_::ImGuiWindowFlags_NoDecoration)) {
-
-            ImGui::TextColored(ImVec4{0.6f, 0.1f, 0.8f, 1.0f}, "Press F1 to toggle editor");
-            ImGui::Separator();
-
-            auto framesPerSecond = 1.0f / deltaTimeInSeconds;
-            ImGui::Text("afps: %.0f rad/s", glm::two_pi<float>() * framesPerSecond);
-            ImGui::Text("dfps: %.0f °/s", glm::degrees(glm::two_pi<float>() * framesPerSecond));
-            ImGui::Text("rfps: %.0f", framesPerSecond);
-            ImGui::Text("rpms: %.0f", framesPerSecond * 60.0f);
-            ImGui::Text("  ft: %.2f ms", deltaTimeInSeconds * 1000.0f);
-#if USE_LILLYPAD
-            ImGui::Separator();
-            ImGui::Text("temp: %d °C", gpuInformation.GpuCoreTemperature);
-            ImGui::Text("  cs: %d (%d)/(%d) MHz", gpuInformation.ClockSpeedCurrent, gpuInformation.ClockSpeedMin, gpuInformation.ClockSpeedMax);
-            ImGui::Text(" mcs: %d (%d)/(%d) MHz", gpuInformation.MemoryClockSpeed, gpuInformation.MemoryClockSpeedMin, gpuInformation.MemoryClockSpeedMax);
+        if (!g_isEditor) {
+            ImGui::SetNextWindowPos({32, 32});
+#if USE_LILLYPAD            
+            ImGui::SetNextWindowSize({168, 192});
+#else
+            ImGui::SetNextWindowSize({168, 136});
 #endif
+            auto windowBackgroundColor = ImGui::GetStyleColorVec4(ImGuiCol_WindowBg);
+            windowBackgroundColor.w = 0.4f;
+            ImGui::PushStyleColor(ImGuiCol_WindowBg, windowBackgroundColor);
+            if (ImGui::Begin("#InGameStatistics", nullptr, ImGuiWindowFlags_Modal | ImGuiWindowFlags_NoDecoration)) {
+
+                ImGui::TextColored(ImVec4{0.9f, 0.7f, 0.0f, 1.0f}, "F1 to toggle editor");
+                ImGui::SeparatorText("Frame Statistics");
+
+                auto framesPerSecond = 1.0f / deltaTimeInSeconds;
+                ImGui::Text("afps: %.0f rad/s", glm::two_pi<float>() * framesPerSecond);
+                ImGui::Text("dfps: %.0f °/s", glm::degrees(glm::two_pi<float>() * framesPerSecond));
+                ImGui::Text("rfps: %.0f", framesPerSecond);
+                ImGui::Text("rpms: %.0f", framesPerSecond * 60.0f);
+                ImGui::Text("  ft: %.2f ms", deltaTimeInSeconds * 1000.0f);
+#if USE_LILLYPAD
+                ImGui::SeparatorText("GPU Statistics");
+                ImGui::Text("temp: %d °C", gpuInformation.GpuCoreTemperature);
+                ImGui::Text("  cs: %d (%d)/(%d) MHz", gpuInformation.ClockSpeedCurrent, gpuInformation.ClockSpeedMin, gpuInformation.ClockSpeedMax);
+                ImGui::Text(" mcs: %d (%d)/(%d) MHz", gpuInformation.MemoryClockSpeed, gpuInformation.MemoryClockSpeedMin, gpuInformation.MemoryClockSpeedMax);
+#endif
+            }
+            ImGui::End();
+            ImGui::PopStyleColor();
         }
-        ImGui::End();
 
         if (ImGui::Begin("Debug")) {
             auto resolutionScale = windowSettings.ResolutionScale;
@@ -1551,6 +1596,11 @@ auto main() -> int32_t {
                     g_framebufferResized = true;
                 }
             }
+
+            ImGui::SliderFloat("Sun Azimuth", &g_sunAzimuth, -3.1415f, 3.1415f);
+            ImGui::SliderFloat("Sun Elevation", &g_sunElevation, 0, 3.1415f);
+            ImGui::ColorEdit3("Sun Color", &g_sunColor[0], ImGuiColorEditFlags_Float);
+            ImGui::SliderFloat("Sun Strength", &g_sunStrength, 0, 500, "%.2f", ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_NoRoundToFormat);
         }
         ImGui::End();
 

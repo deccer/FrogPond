@@ -29,10 +29,18 @@ layout (binding = 3, std430) readonly buffer GpuMaterialBuffer
     SGpuMaterial GpuMaterials[];
 };
 
+layout (binding = 4, std140) uniform ShadingBuffer
+{
+    vec4 SunDirection;
+    vec4 SunStrength;
+};
+
 void main()
 {
     SGpuMaterial material = GpuMaterials[v_material_id];
     
-    o_color = texture(sampler2D(material.base_texture_handle), v_uv);
+    float sun_n_dot_l = clamp(dot(v_normal, -SunDirection.xyz), 0.0, 1.0);
+
+    o_color = texture(sampler2D(material.base_texture_handle), v_uv) * vec4(SunStrength.rgb * sun_n_dot_l, 1.0);
     o_normal = vec4(v_normal * 0.5 + 0.5, 1.0);
 }
