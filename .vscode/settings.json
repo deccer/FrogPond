@@ -81,6 +81,7 @@
         "typeindex": "cpp",
         "forward_list": "cpp",
         "valarray": "cpp",
-        "execution": "cpp"
+        "execution": "cpp",
+        "future": "cpp"
     }
 }

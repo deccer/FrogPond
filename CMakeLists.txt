@@ -11,10 +11,12 @@ endmacro()
 
 set_option(USE_LILLYPAD "Fetch GPU Temperature and clock speeds on nvidia on linux" OFF)
 
-project(FrogPond)
+project(Toadwart)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_WARN_DEPRECATED OFF CACHE BOOL "")
+
+include(cmake/PreCompiledHeaders.cmake)
 
 add_subdirectory(libs)
 add_subdirectory(src)
