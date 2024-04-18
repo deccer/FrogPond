@@ -364,6 +364,236 @@ auto CreateComputeProgramPipeline(
     return programPipeline;
 }
 
+enum class EFormat {
+    R8G8B8A8_Srgb,
+    R32G32B32A32_Float,
+    D24S8_Float,
+    D32_Float
+};
+
+enum class EAttachmentType : uint32_t {
+    ColorAttachment0 = 0u,
+    ColorAttachment1,
+    ColorAttachment2,
+    ColorAttachment3,
+    ColorAttachment4,
+    ColorAttachment5,
+    ColorAttachment6,
+    ColorAttachment7,
+    DepthAttachment,
+    StencilAttachment
+};
+
+enum class EAttachmentKind {
+    Color,
+    Depth,
+    Stencil
+};
+
+struct SFramebufferAttachmentDescriptor {
+    EFormat Format; // GL_SRGB8_ALPHA8, GL_RGB32F, ...
+    std::optional<glm::vec4> ClearValue;
+};
+
+struct SFramebufferAttachment {
+    uint32_t AttachmentId;    
+    EFormat Format; // GL_SRGB8_ALPHA8, GL_RGB32F, ...
+    EAttachmentType Type; // GL_COLOR_ATTACHMENT0, ... GL_DEPTH_ATTACHMENT
+    EAttachmentKind Kind; // GL_COLOR, GL_DEPTH
+    std::optional<glm::vec4> ClearValue;
+};
+
+struct SFramebuffer {
+    std::vector<SFramebufferAttachment> Attachments;
+    uint32_t Width;
+    uint32_t Height;    
+    uint32_t Id;
+    std::string_view Label;
+};
+
+auto FormatToAttachmentType(EFormat attachmentFormat, size_t colorAttachmentIndex) -> EAttachmentType {
+
+    switch (attachmentFormat) {
+        case EFormat::D24S8_Float:
+        case EFormat::D32_Float:
+            return EAttachmentType::DepthAttachment;
+        default:
+            return static_cast<EAttachmentType>(static_cast<std::underlying_type<EAttachmentType>::type>(EAttachmentType::ColorAttachment0) + colorAttachmentIndex);
+    }
+}
+
+auto AttachmentTypeToAttachmentKind(EAttachmentType attachment) -> EAttachmentKind {
+
+    return attachment == EAttachmentType::DepthAttachment
+        ? EAttachmentKind::Depth
+        : EAttachmentKind::Color;
+}
+
+inline auto ToGL(EFormat format) -> uint32_t {
+    switch (format) {
+        case EFormat::D24S8_Float: return GL_DEPTH24_STENCIL8;
+        case EFormat::D32_Float: return GL_DEPTH32F_STENCIL8;
+        case EFormat::R32G32B32A32_Float: return GL_RGBA32F;
+        case EFormat::R8G8B8A8_Srgb: return GL_SRGB8_ALPHA8;
+        default:
+            std::string message = "Format not mappable";
+            glDebugMessageInsert(GL_DEBUG_SOURCE_APPLICATION, GL_DEBUG_TYPE_ERROR, 0, GL_DEBUG_SEVERITY_HIGH, message.size(), message.data());
+            return -1;
+    }
+}
+
+inline auto ToGL(EAttachmentType attachmentType) -> uint32_t {
+    switch (attachmentType) {
+        case EAttachmentType::ColorAttachment0: return GL_COLOR_ATTACHMENT0;
+        case EAttachmentType::ColorAttachment1: return GL_COLOR_ATTACHMENT1;
+        case EAttachmentType::ColorAttachment2: return GL_COLOR_ATTACHMENT2;
+        case EAttachmentType::ColorAttachment3: return GL_COLOR_ATTACHMENT3;
+        case EAttachmentType::ColorAttachment4: return GL_COLOR_ATTACHMENT4;
+        case EAttachmentType::ColorAttachment5: return GL_COLOR_ATTACHMENT5;
+        case EAttachmentType::ColorAttachment6: return GL_COLOR_ATTACHMENT6;
+        case EAttachmentType::ColorAttachment7: return GL_COLOR_ATTACHMENT7;
+        case EAttachmentType::DepthAttachment: return GL_DEPTH_ATTACHMENT;
+        case EAttachmentType::StencilAttachment: return GL_STENCIL_ATTACHMENT;
+        default:
+            std::string message = "AttachmentType not mappable";
+            glDebugMessageInsert(GL_DEBUG_SOURCE_APPLICATION, GL_DEBUG_TYPE_ERROR, 0, GL_DEBUG_SEVERITY_HIGH, message.size(), message.data());
+            return -1;        
+    }
+}
+
+inline  auto ToGL(EAttachmentKind attachmentKind) -> uint32_t {
+    switch (attachmentKind) {
+        case EAttachmentKind::Color: return GL_COLOR;
+        case EAttachmentKind::Depth: return GL_DEPTH;
+        case EAttachmentKind::Stencil: return GL_STENCIL;
+        default:
+            std::string message = "AttachmentKind not mappable";
+            glDebugMessageInsert(GL_DEBUG_SOURCE_APPLICATION, GL_DEBUG_TYPE_ERROR, 0, GL_DEBUG_SEVERITY_HIGH, message.size(), message.data());
+            return -1;    
+    }
+}
+
+auto CreateFramebuffer(
+    std::string_view label,
+    uint32_t width,
+    uint32_t height,
+    std::span<SFramebufferAttachmentDescriptor> attachmentsDescriptors) -> SFramebuffer {
+
+    std::array<uint32_t, 8> drawBuffers = {};
+    std::fill_n(drawBuffers.begin(), 8, GL_NONE);
+
+    SFramebuffer framebuffer = {};
+    framebuffer.Width = width;
+    framebuffer.Height = height;
+
+    glCreateFramebuffers(1, &framebuffer.Id);
+    SetDebugLabel(framebuffer.Id, GL_FRAMEBUFFER, label);
+    framebuffer.Label = label;
+
+    for (auto attachmentIndex = 0; auto attachmentDescriptor : attachmentsDescriptors) {
+
+        SFramebufferAttachment attachment = {};
+        attachment.Format = attachmentDescriptor.Format;
+        attachment.ClearValue = std::move(attachmentDescriptor.ClearValue);
+        attachment.Type = FormatToAttachmentType(attachment.Format, attachmentIndex);
+        attachment.Kind = AttachmentTypeToAttachmentKind(attachment.Type);
+
+        uint32_t attachmentId = 0;
+        glCreateTextures(GL_TEXTURE_2D, 1, &attachmentId);
+        SetDebugLabel(attachmentId, GL_TEXTURE, std::format("{}_{}x{}", label, width, height));
+        glTextureStorage2D(attachmentId, 1, ToGL(attachment.Format), width, height);
+
+        glNamedFramebufferTexture(framebuffer.Id, ToGL(attachment.Type), attachmentId, 0);
+
+        if (attachment.Type != EAttachmentType::DepthAttachment && attachment.Type != EAttachmentType::StencilAttachment) {
+            drawBuffers[attachmentIndex] = ToGL(attachment.Type);
+        }
+
+        attachment.AttachmentId = attachmentId;
+        framebuffer.Attachments.push_back(std::move(attachment));
+
+        attachmentIndex++;
+    }
+
+    glNamedFramebufferDrawBuffers(framebuffer.Id, 8, drawBuffers.data());
+
+    auto framebufferStatus = glCheckNamedFramebufferStatus(framebuffer.Id, GL_FRAMEBUFFER);
+    if (framebufferStatus != GL_FRAMEBUFFER_COMPLETE) {
+        auto message = std::format("Framebuffer {} is incomplete", framebuffer.Label);
+        glDebugMessageInsert(GL_DEBUG_SOURCE_APPLICATION, GL_DEBUG_TYPE_ERROR, 1, GL_DEBUG_SEVERITY_HIGH, message.size(), message.data());
+    }
+
+    return framebuffer;
+}
+
+auto ResizeFramebuffer(
+    SFramebuffer& framebuffer,
+    uint32_t width,
+    uint32_t height) -> void {
+
+    std::array<uint32_t, 8> drawBuffers = {};
+    std::fill_n(drawBuffers.begin(), 8, GL_NONE);
+
+    for (auto attachmentIndex = 0; auto& attachment : framebuffer.Attachments) {
+
+        uint32_t attachmentId = attachment.AttachmentId;
+        glDeleteTextures(1, &attachmentId);
+
+        glCreateTextures(GL_TEXTURE_2D, 1, &attachmentId);
+        SetDebugLabel(attachmentId, GL_TEXTURE, std::format("{}_{}x{}", framebuffer.Label, width, height));
+        glTextureStorage2D(attachmentId, 1, ToGL(attachment.Format), width, height);
+
+        glNamedFramebufferTexture(framebuffer.Id, ToGL(attachment.Type), attachmentId, 0);
+
+        if (attachment.Type != EAttachmentType::DepthAttachment && attachment.Type != EAttachmentType::StencilAttachment) {
+            drawBuffers[attachmentIndex] = ToGL(attachment.Type);
+        }
+
+        attachment.AttachmentId = attachmentId;
+
+        attachmentIndex++;
+    }
+
+    glNamedFramebufferDrawBuffers(framebuffer.Id, 8, drawBuffers.data());
+
+    auto framebufferStatus = glCheckNamedFramebufferStatus(framebuffer.Id, GL_FRAMEBUFFER);
+    if (framebufferStatus != GL_FRAMEBUFFER_COMPLETE) {
+        auto message = std::format("Framebuffer {} is incomplete", framebuffer.Label);
+        glDebugMessageInsert(GL_DEBUG_SOURCE_APPLICATION, GL_DEBUG_TYPE_ERROR, 1, GL_DEBUG_SEVERITY_HIGH, message.size(), message.data());
+    }    
+
+    framebuffer.Width = width;
+    framebuffer.Height = height;
+}
+
+inline auto DestroyFramebuffer(SFramebuffer& framebuffer) -> void {
+
+    for (auto attachment : framebuffer.Attachments) {
+        glDeleteTextures(1, &attachment.AttachmentId);
+    }
+    glDeleteFramebuffers(1, &framebuffer.Id);
+
+    framebuffer.Attachments.clear();
+}
+
+inline auto BindFramebuffer(const SFramebuffer& framebuffer) -> void {
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer.Id);
+}
+
+inline auto ClearFramebuffer(const SFramebuffer& framebuffer) -> void {
+    for (auto attachmentIndex = 0; auto attachment : framebuffer.Attachments) {
+        if (attachment.ClearValue.has_value()) {
+            glClearNamedFramebufferfv(
+                framebuffer.Id,
+                ToGL(attachment.Kind),
+                attachment.Kind == EAttachmentKind::Depth ? 0 : attachmentIndex, 
+                attachment.Kind == EAttachmentKind::Depth ? &(*attachment.ClearValue).r : glm::value_ptr(*attachment.ClearValue));
+        }
+
+        attachmentIndex++;
+    }
+}
+
 auto OnKey(
     GLFWwindow* window,
     const int32_t key,
@@ -993,7 +1223,7 @@ auto main() -> int32_t {
         ? primaryMonitor
         : nullptr;
 
-    g_window = glfwCreateWindow(windowWidth, windowHeight, "FrogPond", monitor, nullptr);
+    g_window = glfwCreateWindow(windowWidth, windowHeight, "Toadwart", monitor, nullptr);
     if (g_window == nullptr) {
         spdlog::error("Unable to create a window");
         return -3;
@@ -1167,37 +1397,12 @@ auto main() -> int32_t {
         return glm::translate(glm::mat4x4(1.0f), glm::vec3(x, y, z));
     };
 
-    uint32_t mainAlbedoTexture = 0;
-    glCreateTextures(GL_TEXTURE_2D, 1, &mainAlbedoTexture);
-    SetDebugLabel(mainAlbedoTexture, GL_TEXTURE, std::format("MainAlbedoTexture_{}x{}", g_framebufferSize.x, g_framebufferSize.y));
-    glTextureStorage2D(mainAlbedoTexture, 1, GL_SRGB8_ALPHA8, g_framebufferSize.x, g_framebufferSize.y);
-
-    uint32_t mainNormalTexture = 0;
-    glCreateTextures(GL_TEXTURE_2D, 1, &mainNormalTexture);
-    SetDebugLabel(mainNormalTexture, GL_TEXTURE, std::format("MainNormalTexture_{}x{}", g_framebufferSize.x, g_framebufferSize.y));
-    glTextureStorage2D(mainNormalTexture, 1, GL_RGBA32F, g_framebufferSize.x, g_framebufferSize.y);
-
-    uint32_t mainDepthTexture = 0;
-    glCreateTextures(GL_TEXTURE_2D, 1, &mainDepthTexture);
-    SetDebugLabel(mainDepthTexture, GL_TEXTURE, std::format("MainDepthTexture_{}x{}", g_framebufferSize.x, g_framebufferSize.y));
-    glTextureStorage2D(mainDepthTexture, 1, GL_DEPTH32F_STENCIL8, g_framebufferSize.x, g_framebufferSize.y);
-
-    uint32_t mainFramebuffer = 0;
-    glCreateFramebuffers(1, &mainFramebuffer);
-    SetDebugLabel(mainFramebuffer, GL_FRAMEBUFFER, "MainFramebuffer");    
-    glNamedFramebufferTexture(mainFramebuffer, GL_COLOR_ATTACHMENT0, mainAlbedoTexture, 0);
-    glNamedFramebufferTexture(mainFramebuffer, GL_COLOR_ATTACHMENT1, mainNormalTexture, 0);
-    glNamedFramebufferTexture(mainFramebuffer, GL_DEPTH_ATTACHMENT, mainDepthTexture, 0);
-
-    constexpr std::array<uint32_t, 8> drawBuffers = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_NONE, GL_NONE, GL_NONE, GL_NONE, GL_NONE, GL_NONE };
-    glNamedFramebufferDrawBuffers(mainFramebuffer, 8, drawBuffers.data());
-
-    auto mainFramebufferStatus = glCheckNamedFramebufferStatus(mainFramebuffer, GL_FRAMEBUFFER);
-    if (mainFramebufferStatus != GL_FRAMEBUFFER_COMPLETE) {
-        auto errorMessage = std::string("Framebuffer incomplete");
-        glDebugMessageInsert(GL_DEBUG_SOURCE_APPLICATION, GL_DEBUG_TYPE_ERROR, 0, GL_DEBUG_SEVERITY_HIGH, errorMessage.size(), errorMessage.data());
-        return -10;
-    }
+    SFramebufferAttachmentDescriptor attachmentFormats[] = { 
+        { EFormat::R8G8B8A8_Srgb, glm::vec4(0.1f, 0.1f, 0.1f, 1.0f) }, 
+        { EFormat::R32G32B32A32_Float, std::nullopt }, 
+        { EFormat::D32_Float, glm::vec4(1.0f, 0.0f, 0.0f, 0.0f)},
+    };
+    auto mainFramebuffer = CreateFramebuffer("MainFramebuffer", g_framebufferSize.x, g_framebufferSize.y, attachmentFormats);
 
     g_fullscreenSamplerNearestNearestClampToEdge = GetOrCreateSampler(SSamplerData{
         .Name = 0,
@@ -1462,28 +1667,7 @@ auto main() -> int32_t {
                 g_framebufferResized = false;
             }
 
-            glDeleteTextures(1, &mainAlbedoTexture);
-            glCreateTextures(GL_TEXTURE_2D, 1, &mainAlbedoTexture);
-            SetDebugLabel(mainAlbedoTexture, GL_TEXTURE, std::format("MainTexture_{}x{}", scaledFramebufferSize.x, scaledFramebufferSize.y));
-            glTextureStorage2D(mainAlbedoTexture, 1, GL_RGBA8, scaledFramebufferSize.x, scaledFramebufferSize.y);
-
-            glDeleteTextures(1, &mainNormalTexture);
-            glCreateTextures(GL_TEXTURE_2D, 1, &mainNormalTexture);
-            SetDebugLabel(mainNormalTexture, GL_TEXTURE, std::format("MainNormalTexture_{}x{}", scaledFramebufferSize.x, scaledFramebufferSize.y));
-            glTextureStorage2D(mainNormalTexture, 1, GL_RGBA32F, scaledFramebufferSize.x, scaledFramebufferSize.y);  
-
-            glDeleteTextures(1, &mainDepthTexture);
-            glCreateTextures(GL_TEXTURE_2D, 1, &mainDepthTexture);
-            SetDebugLabel(mainDepthTexture, GL_TEXTURE, std::format("MainDepthTexture_{}x{}", scaledFramebufferSize.x, scaledFramebufferSize.y));
-            glTextureStorage2D(mainDepthTexture, 1, GL_DEPTH32F_STENCIL8, scaledFramebufferSize.x, scaledFramebufferSize.y);
-
-            glNamedFramebufferTexture(mainFramebuffer, GL_COLOR_ATTACHMENT0, mainAlbedoTexture, 0);
-            glNamedFramebufferTexture(mainFramebuffer, GL_COLOR_ATTACHMENT1, mainNormalTexture, 0);
-            glNamedFramebufferTexture(mainFramebuffer, GL_DEPTH_ATTACHMENT, mainDepthTexture, 0);            
-
-            constexpr std::array<uint32_t, 8> drawBuffers = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_NONE, GL_NONE, GL_NONE, GL_NONE, GL_NONE, GL_NONE };
-            glNamedFramebufferDrawBuffers(mainFramebuffer, 8, drawBuffers.data());
-            glNamedFramebufferTexture(mainFramebuffer, GL_DEPTH_ATTACHMENT, mainDepthTexture, 0);
+            ResizeFramebuffer(mainFramebuffer, scaledFramebufferSize.x, scaledFramebufferSize.y);
 
             framebufferWasResized = true;
         }
@@ -1511,15 +1695,14 @@ auto main() -> int32_t {
         } else {
             glBindProgramPipeline(simpleProgramPipeline);
         }
-        glBindFramebuffer(GL_FRAMEBUFFER, mainFramebuffer);
+        BindFramebuffer(mainFramebuffer);
 
         auto clearDepth = 1.0f;
         glDisable(GL_FRAMEBUFFER_SRGB);
         glColorMaski(0, true, true, true, true);
         glColorMaski(1, true, true, true, true);
-        glClearNamedFramebufferfv(mainFramebuffer, GL_COLOR, 0, glm::value_ptr(glm::vec4{0.4f, 0.1f, 0.6f, 1.0f}));
-        glClearNamedFramebufferfv(mainFramebuffer, GL_COLOR, 1, glm::value_ptr(glm::vec4{0.0f, 0.0f, 0.0f, 0.0f}));
-        glClearNamedFramebufferfv(mainFramebuffer, GL_DEPTH, 0, &clearDepth);
+
+        ClearFramebuffer(mainFramebuffer);
         glEnable(GL_FRAMEBUFFER_SRGB);
 
         glVertexArrayElementBuffer(g_defaultInputLayout, megaIndexBuffer);
@@ -1755,8 +1938,8 @@ auto main() -> int32_t {
                 }
 
                 auto texture = drawMainFramebufferIndex == 0
-                    ? mainAlbedoTexture
-                    : mainNormalTexture;
+                    ? mainFramebuffer.Attachments[0].AttachmentId
+                    : mainFramebuffer.Attachments[1].AttachmentId;
                 auto imagePosition = ImGui::GetCursorPos();
                 ImGui::Image(reinterpret_cast<ImTextureID>(texture), availableSceneWindowSize, g_imvec2UnitY, g_imvec2UnitX);
                 ImGui::SetCursorPos(imagePosition);
@@ -1778,7 +1961,7 @@ auto main() -> int32_t {
 
             PushDebugGroup("Blit To UI");
             glViewport(0, 0, g_framebufferSize.x, g_framebufferSize.y);
-            DrawFullscreenTriangleWithTexture(mainAlbedoTexture);
+            DrawFullscreenTriangleWithTexture(mainFramebuffer.Attachments[0].AttachmentId);
             PopDebugGroup();
 /*
             glBlitNamedFramebuffer(mainFramebuffer, 0,
@@ -1826,11 +2009,8 @@ auto main() -> int32_t {
     for (auto texture : g_textures) {
         glDeleteTextures(1, &texture);
     }
-    glDeleteTextures(1, &mainAlbedoTexture);
-    glDeleteTextures(1, &mainDepthTexture);
-    glDeleteTextures(1, &mainNormalTexture);
 
-    glDeleteFramebuffers(1, &mainFramebuffer);
+    DestroyFramebuffer(mainFramebuffer);
 
     glDeleteBuffers(1, &objectBuffer);
 
