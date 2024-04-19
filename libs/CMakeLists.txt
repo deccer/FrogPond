@@ -1,3 +1,4 @@
+set(FETCHCONTENT_QUIET ON CACHE BOOL "" FORCE)
 include(FetchContent)
 
 #- GLFW-----------------------------------------------------------------------------------------------------------------
@@ -114,21 +115,29 @@ FetchContent_MakeAvailable(meshoptimizer)
 
 #- Ktx -----------------------------------------------------------------------------------------------------------------
 
-option(KTX_FEATURE_TESTS "" OFF)
-option(KTX_FEATURE_VULKAN "" OFF)
-option(KTX_FEATURE_GL_UPLOAD "" OFF)
-option(KTX_FEATURE_VK_UPLOAD "" OFF)
-option(KTX_FEATURE_WRITE "" OFF)
-option(KTX_FEATURE_TOOLS "" OFF)
-option(KTX_FEATURE_STATIC_LIBRARY "" ON)
+# KTX changes global variables CMAKE_ARCHIVE_OUTPUT_DIRECTORY, CMAKE_LIBRARY_OUTPUT_DIRECTORY and
+# CMAKE_RUNTIME_OUTPUT_DIRECTORY, save them and restore later
+set(TOADWART_TEMPORARY_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_ARCHIVE_OUTPUT_DIRECTORY})
+set(TOADWART_TEMPORARY_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_LIBRARY_OUTPUT_DIRECTORY})
+set(TOADWART_TEMPORARY_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+
 FetchContent_Declare(
     ktx
     GIT_REPOSITORY https://github.com/KhronosGroup/KTX-Software.git
     GIT_TAG        v4.3.2
 )
+set(KTX_FEATURE_TESTS OFF CACHE BOOL "" FORCE)
+set(KTX_FEATURE_KTX1 ON CACHE BOOL "" FORCE)
+set(KTX_FEATURE_KTX2 ON CACHE BOOL "" FORCE)
+set(KTX_FEATURE_STATIC_LIBRARY ON CACHE BOOL "" FORCE)
+set(KTX_FEATURE_VK_UPLOAD OFF CACHE BOOL "" FORCE)
+set(KTX_FEATURE_GL_UPLOAD OFF CACHE BOOL "" FORCE)
 
 message("Fetching ktx")
 FetchContent_MakeAvailable(ktx)
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${TOADWART_TEMPORARY_ARCHIVE_OUTPUT_DIRECTORY})
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${TOADWART_TEMPORARY_LIBRARY_OUTPUT_DIRECTORY})
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${TOADWART_TEMPORARY_RUNTIME_OUTPUT_DIRECTORY})
 target_compile_options(ktx
     PRIVATE
     $<$<OR:$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>>:

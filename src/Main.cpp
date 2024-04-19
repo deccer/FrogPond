@@ -1,4 +1,32 @@
+#include <algorithm>
+#include <chrono>
 #include <cstdint>
+#include <execution>
+#include <expected>
+#include <filesystem>
+#include <fstream>
+#include <functional>
+#include <iostream>
+#include <iterator>
+#include <memory>
+#include <ranges>
+#include <span>
+#include <sstream>
+#include <stack>
+#include <string_view>
+#include <thread>
+#include <tuple>
+#include <unordered_map>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "Macros.hpp"
+#include "Io.hpp"
+#include "Format.hpp"
+#include "Framebuffer.hpp"
+#include "DebugLabel.hpp"
+
 #include <spdlog/spdlog.h>
 #include <glad/gl.h>
 #include <GLFW/glfw3.h>
@@ -12,27 +40,6 @@
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/string_cast.hpp>
 
-#include <vector>
-#include <unordered_map>
-#include <filesystem>
-#include <algorithm>
-#include <iterator>
-#include <iostream>
-#include <sstream>
-#include <fstream>
-#include <functional>
-#include <string_view>
-#include <expected>
-#include <memory>
-#include <utility>
-#include <span>
-#include <tuple>
-#include <stack>
-#include <variant>
-#include <ranges>
-#include <thread>
-#include <chrono>
-
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
@@ -43,18 +50,14 @@
 #include <fastgltf/tools.hpp>
 #include <fastgltf/types.hpp>
 
-#include <tracy/Tracy.hpp>
-#include <tracy/TracyOpenGL.hpp>
-
 #include <debugbreak.h>
-#if USE_LILLYPAD
-#include "Lillypad.hpp"
+#if defined(TOADWART_ENABLE_LILYPAD)
+#include "Lilypad.hpp"
 #endif
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
-#include <execution>
 #define POOLSTL_STD_SUPPLEMENT
 #include <poolstl/poolstl.hpp>
 
@@ -226,6 +229,7 @@ struct SModel {
 constexpr ImVec2 g_imvec2UnitX = ImVec2(1, 0);
 constexpr ImVec2 g_imvec2UnitY = ImVec2(0, 1);
 
+bool g_isRunningInRenderDoc = false;
 GLFWwindow* g_window = nullptr;
 ImGuiContext* g_imguiContext = nullptr;
 ImPlotContext* g_implotContext = nullptr;
@@ -277,37 +281,6 @@ uint32_t g_iconPackage = 0;
 uint32_t g_iconPackageGreen = 0;
 
 bool g_gpuMaterialsNeedUpdate = true;
-
-auto inline ReadTextFromFile(const std::filesystem::path& filePath) -> std::string {
-
-    std::ifstream fileStream{filePath};
-    return {std::istreambuf_iterator<char>(fileStream), std::istreambuf_iterator<char>()};
-}
-
-auto inline ReadBinaryFromFile(const std::filesystem::path& filePath) -> std::pair<std::unique_ptr<std::byte[]>, std::size_t>
-{
-    std::size_t fileSize = std::filesystem::file_size(filePath);
-    auto memory = std::make_unique<std::byte[]>(fileSize);
-    std::ifstream file{filePath, std::ifstream::binary};
-    std::copy(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>(), reinterpret_cast<char*>(memory.get()));
-    return {std::move(memory), fileSize};
-}
-
-auto inline SetDebugLabel(
-    const uint32_t object,
-    const uint32_t objectType,
-    const std::string_view label) -> void {
-
-    glObjectLabel(objectType, object, static_cast<GLsizei>(label.size()), label.data());
-}
-
-auto inline PushDebugGroup(const std::string_view label) -> void {
-    glPushDebugGroup(GL_DEBUG_SOURCE_APPLICATION, 0, label.size(), label.data());
-}
-
-auto inline PopDebugGroup() -> void {
-    glPopDebugGroup();
-}
 
 auto CreateProgram(
     const uint32_t shaderType,
@@ -362,236 +335,6 @@ auto CreateComputeProgramPipeline(
     glUseProgramStages(programPipeline, GL_COMPUTE_SHADER_BIT, computeShader);
 
     return programPipeline;
-}
-
-enum class EFormat {
-    R8G8B8A8_Srgb,
-    R32G32B32A32_Float,
-    D24S8_Float,
-    D32_Float
-};
-
-enum class EAttachmentType : uint32_t {
-    ColorAttachment0 = 0u,
-    ColorAttachment1,
-    ColorAttachment2,
-    ColorAttachment3,
-    ColorAttachment4,
-    ColorAttachment5,
-    ColorAttachment6,
-    ColorAttachment7,
-    DepthAttachment,
-    StencilAttachment
-};
-
-enum class EAttachmentKind {
-    Color,
-    Depth,
-    Stencil
-};
-
-struct SFramebufferAttachmentDescriptor {
-    EFormat Format; // GL_SRGB8_ALPHA8, GL_RGB32F, ...
-    std::optional<glm::vec4> ClearValue;
-};
-
-struct SFramebufferAttachment {
-    uint32_t AttachmentId;    
-    EFormat Format; // GL_SRGB8_ALPHA8, GL_RGB32F, ...
-    EAttachmentType Type; // GL_COLOR_ATTACHMENT0, ... GL_DEPTH_ATTACHMENT
-    EAttachmentKind Kind; // GL_COLOR, GL_DEPTH
-    std::optional<glm::vec4> ClearValue;
-};
-
-struct SFramebuffer {
-    std::vector<SFramebufferAttachment> Attachments;
-    uint32_t Width;
-    uint32_t Height;    
-    uint32_t Id;
-    std::string_view Label;
-};
-
-auto FormatToAttachmentType(EFormat attachmentFormat, size_t colorAttachmentIndex) -> EAttachmentType {
-
-    switch (attachmentFormat) {
-        case EFormat::D24S8_Float:
-        case EFormat::D32_Float:
-            return EAttachmentType::DepthAttachment;
-        default:
-            return static_cast<EAttachmentType>(static_cast<std::underlying_type<EAttachmentType>::type>(EAttachmentType::ColorAttachment0) + colorAttachmentIndex);
-    }
-}
-
-auto AttachmentTypeToAttachmentKind(EAttachmentType attachment) -> EAttachmentKind {
-
-    return attachment == EAttachmentType::DepthAttachment
-        ? EAttachmentKind::Depth
-        : EAttachmentKind::Color;
-}
-
-inline auto ToGL(EFormat format) -> uint32_t {
-    switch (format) {
-        case EFormat::D24S8_Float: return GL_DEPTH24_STENCIL8;
-        case EFormat::D32_Float: return GL_DEPTH32F_STENCIL8;
-        case EFormat::R32G32B32A32_Float: return GL_RGBA32F;
-        case EFormat::R8G8B8A8_Srgb: return GL_SRGB8_ALPHA8;
-        default:
-            std::string message = "Format not mappable";
-            glDebugMessageInsert(GL_DEBUG_SOURCE_APPLICATION, GL_DEBUG_TYPE_ERROR, 0, GL_DEBUG_SEVERITY_HIGH, message.size(), message.data());
-            return -1;
-    }
-}
-
-inline auto ToGL(EAttachmentType attachmentType) -> uint32_t {
-    switch (attachmentType) {
-        case EAttachmentType::ColorAttachment0: return GL_COLOR_ATTACHMENT0;
-        case EAttachmentType::ColorAttachment1: return GL_COLOR_ATTACHMENT1;
-        case EAttachmentType::ColorAttachment2: return GL_COLOR_ATTACHMENT2;
-        case EAttachmentType::ColorAttachment3: return GL_COLOR_ATTACHMENT3;
-        case EAttachmentType::ColorAttachment4: return GL_COLOR_ATTACHMENT4;
-        case EAttachmentType::ColorAttachment5: return GL_COLOR_ATTACHMENT5;
-        case EAttachmentType::ColorAttachment6: return GL_COLOR_ATTACHMENT6;
-        case EAttachmentType::ColorAttachment7: return GL_COLOR_ATTACHMENT7;
-        case EAttachmentType::DepthAttachment: return GL_DEPTH_ATTACHMENT;
-        case EAttachmentType::StencilAttachment: return GL_STENCIL_ATTACHMENT;
-        default:
-            std::string message = "AttachmentType not mappable";
-            glDebugMessageInsert(GL_DEBUG_SOURCE_APPLICATION, GL_DEBUG_TYPE_ERROR, 0, GL_DEBUG_SEVERITY_HIGH, message.size(), message.data());
-            return -1;        
-    }
-}
-
-inline  auto ToGL(EAttachmentKind attachmentKind) -> uint32_t {
-    switch (attachmentKind) {
-        case EAttachmentKind::Color: return GL_COLOR;
-        case EAttachmentKind::Depth: return GL_DEPTH;
-        case EAttachmentKind::Stencil: return GL_STENCIL;
-        default:
-            std::string message = "AttachmentKind not mappable";
-            glDebugMessageInsert(GL_DEBUG_SOURCE_APPLICATION, GL_DEBUG_TYPE_ERROR, 0, GL_DEBUG_SEVERITY_HIGH, message.size(), message.data());
-            return -1;    
-    }
-}
-
-auto CreateFramebuffer(
-    std::string_view label,
-    uint32_t width,
-    uint32_t height,
-    std::span<SFramebufferAttachmentDescriptor> attachmentsDescriptors) -> SFramebuffer {
-
-    std::array<uint32_t, 8> drawBuffers = {};
-    std::fill_n(drawBuffers.begin(), 8, GL_NONE);
-
-    SFramebuffer framebuffer = {};
-    framebuffer.Width = width;
-    framebuffer.Height = height;
-
-    glCreateFramebuffers(1, &framebuffer.Id);
-    SetDebugLabel(framebuffer.Id, GL_FRAMEBUFFER, label);
-    framebuffer.Label = label;
-
-    for (auto attachmentIndex = 0; auto attachmentDescriptor : attachmentsDescriptors) {
-
-        SFramebufferAttachment attachment = {};
-        attachment.Format = attachmentDescriptor.Format;
-        attachment.ClearValue = std::move(attachmentDescriptor.ClearValue);
-        attachment.Type = FormatToAttachmentType(attachment.Format, attachmentIndex);
-        attachment.Kind = AttachmentTypeToAttachmentKind(attachment.Type);
-
-        uint32_t attachmentId = 0;
-        glCreateTextures(GL_TEXTURE_2D, 1, &attachmentId);
-        SetDebugLabel(attachmentId, GL_TEXTURE, std::format("{}_{}x{}", label, width, height));
-        glTextureStorage2D(attachmentId, 1, ToGL(attachment.Format), width, height);
-
-        glNamedFramebufferTexture(framebuffer.Id, ToGL(attachment.Type), attachmentId, 0);
-
-        if (attachment.Type != EAttachmentType::DepthAttachment && attachment.Type != EAttachmentType::StencilAttachment) {
-            drawBuffers[attachmentIndex] = ToGL(attachment.Type);
-        }
-
-        attachment.AttachmentId = attachmentId;
-        framebuffer.Attachments.push_back(std::move(attachment));
-
-        attachmentIndex++;
-    }
-
-    glNamedFramebufferDrawBuffers(framebuffer.Id, 8, drawBuffers.data());
-
-    auto framebufferStatus = glCheckNamedFramebufferStatus(framebuffer.Id, GL_FRAMEBUFFER);
-    if (framebufferStatus != GL_FRAMEBUFFER_COMPLETE) {
-        auto message = std::format("Framebuffer {} is incomplete", framebuffer.Label);
-        glDebugMessageInsert(GL_DEBUG_SOURCE_APPLICATION, GL_DEBUG_TYPE_ERROR, 1, GL_DEBUG_SEVERITY_HIGH, message.size(), message.data());
-    }
-
-    return framebuffer;
-}
-
-auto ResizeFramebuffer(
-    SFramebuffer& framebuffer,
-    uint32_t width,
-    uint32_t height) -> void {
-
-    std::array<uint32_t, 8> drawBuffers = {};
-    std::fill_n(drawBuffers.begin(), 8, GL_NONE);
-
-    for (auto attachmentIndex = 0; auto& attachment : framebuffer.Attachments) {
-
-        uint32_t attachmentId = attachment.AttachmentId;
-        glDeleteTextures(1, &attachmentId);
-
-        glCreateTextures(GL_TEXTURE_2D, 1, &attachmentId);
-        SetDebugLabel(attachmentId, GL_TEXTURE, std::format("{}_{}x{}", framebuffer.Label, width, height));
-        glTextureStorage2D(attachmentId, 1, ToGL(attachment.Format), width, height);
-
-        glNamedFramebufferTexture(framebuffer.Id, ToGL(attachment.Type), attachmentId, 0);
-
-        if (attachment.Type != EAttachmentType::DepthAttachment && attachment.Type != EAttachmentType::StencilAttachment) {
-            drawBuffers[attachmentIndex] = ToGL(attachment.Type);
-        }
-
-        attachment.AttachmentId = attachmentId;
-
-        attachmentIndex++;
-    }
-
-    glNamedFramebufferDrawBuffers(framebuffer.Id, 8, drawBuffers.data());
-
-    auto framebufferStatus = glCheckNamedFramebufferStatus(framebuffer.Id, GL_FRAMEBUFFER);
-    if (framebufferStatus != GL_FRAMEBUFFER_COMPLETE) {
-        auto message = std::format("Framebuffer {} is incomplete", framebuffer.Label);
-        glDebugMessageInsert(GL_DEBUG_SOURCE_APPLICATION, GL_DEBUG_TYPE_ERROR, 1, GL_DEBUG_SEVERITY_HIGH, message.size(), message.data());
-    }    
-
-    framebuffer.Width = width;
-    framebuffer.Height = height;
-}
-
-inline auto DestroyFramebuffer(SFramebuffer& framebuffer) -> void {
-
-    for (auto attachment : framebuffer.Attachments) {
-        glDeleteTextures(1, &attachment.AttachmentId);
-    }
-    glDeleteFramebuffers(1, &framebuffer.Id);
-
-    framebuffer.Attachments.clear();
-}
-
-inline auto BindFramebuffer(const SFramebuffer& framebuffer) -> void {
-    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer.Id);
-}
-
-inline auto ClearFramebuffer(const SFramebuffer& framebuffer) -> void {
-    for (auto attachmentIndex = 0; auto attachment : framebuffer.Attachments) {
-        if (attachment.ClearValue.has_value()) {
-            glClearNamedFramebufferfv(
-                framebuffer.Id,
-                ToGL(attachment.Kind),
-                attachment.Kind == EAttachmentKind::Depth ? 0 : attachmentIndex, 
-                attachment.Kind == EAttachmentKind::Depth ? &(*attachment.ClearValue).r : glm::value_ptr(*attachment.ClearValue));
-        }
-
-        attachmentIndex++;
-    }
 }
 
 auto OnKey(
@@ -923,7 +666,7 @@ auto AddModelFromFile(
     const uint32_t megaIndexBuffer,
     const uint32_t megaMaterialBuffer) -> void {
 
-    ZoneScoped;
+    TOADWART_PROFILE_SCOPED();
     if (g_modelNameToModelMap.contains(modelName))
     {
         return;
@@ -959,9 +702,9 @@ auto AddModelFromFile(
 
     std::transform(poolstl::execution::par, imageIndices.begin(), imageIndices.end(), imageDates.begin(), [&](size_t imageIndex) {
 
-        ZoneScopedN("Load Image");
+        TOADWART_PROFILE_NAMED_SCOPE("Load Image");
         const auto& fgImage = fgAsset.images[imageIndex];
-        ZoneName(fgImage.name.c_str(), fgImage.name.size());
+        TOADWART_PROFILE_NAMED_SIZED_SCOPE(fgImage.name.c_str(), fgImage.name.size());
 
         auto imageData = [&] {
 
@@ -1047,8 +790,8 @@ auto AddModelFromFile(
         auto imageIndex = fgTexture.imageIndex.has_value() ? fgTexture.imageIndex.value() : 0;
         auto& imageData = imageDates[imageIndex];
 
-        ZoneScopedN("Create Textures");
-        ZoneName(imageData.Name.c_str(), imageData.Name.size());
+        TOADWART_PROFILE_NAMED_SCOPE("Create Textures");
+        TOADWART_PROFILE_NAMED_SIZED_SCOPE(imageData.Name.c_str(), imageData.Name.size());
 
         if (imageData.Data == nullptr) {
             continue;
@@ -1067,12 +810,17 @@ auto AddModelFromFile(
         glGenerateTextureMipmap(textureId);
         imageData.Data.release();
 
-        auto textureHandle = glGetTextureSamplerHandleARB(textureId, sampler);
-        glMakeTextureHandleResidentARB(textureHandle);
+        if (g_isRunningInRenderDoc) {
+            g_textures.push_back(textureId);
+            g_textureHandles.push_back(textureId);
 
-        g_textures.push_back(textureId);
-        //g_textureHandles.push_back(textureId);
-        g_textureHandles.push_back(textureHandle);
+        } else {
+            auto textureHandle = glGetTextureSamplerHandleARB(textureId, sampler);
+            glMakeTextureHandleResidentARB(textureHandle);
+
+            g_textures.push_back(textureId);
+            g_textureHandles.push_back(textureHandle);
+        }
     }
 
     for (auto& fgMaterial : fgAsset.materials) {
@@ -1140,8 +888,8 @@ auto AddModelFromFile(
 
         for (const auto& fgPrimitive : fgMesh.primitives)
         {
-            ZoneScopedN("LoadPrimitive");
-            ZoneName(fgMesh.name.data(), fgMesh.name.size());
+            TOADWART_PROFILE_NAMED_SCOPE("LoadPrimitive");
+            TOADWART_PROFILE_NAMED_SIZED_SCOPE(fgMesh.name.data(), fgMesh.name.size());
 
             const auto primitiveMaterialIndex = fgPrimitive.materialIndex.has_value()
                 ? fgPrimitive.materialIndex.value()
@@ -1169,9 +917,20 @@ auto AddModelFromFile(
     g_modelNameToModelMap.insert({modelName, std::move(model)});
 }
 
-auto main() -> int32_t {
+auto main(
+    [[maybe_unused]] int32_t argc,
+    [[maybe_unused]] char* argv[],
+    char** environmentVariables) -> int32_t {
 
-    ZoneScoped;
+    g_isRunningInRenderDoc = getenv("RENDERDOC_CAPFILE") != nullptr ||
+        getenv("RENDERDOC_CAPOPTS") != nullptr ||
+        getenv("RENDERDOC_DEBUG_LOG_FILE") != nullptr ||
+        getenv("RENDERDOC_ORIGLIBPATH") != nullptr ||
+        getenv("RENDERDOC_ORIGPRELOAD") != nullptr;
+
+    spdlog::info("Running in RenderDoc: {}", g_isRunningInRenderDoc);
+
+    TOADWART_PROFILE_SCOPED();
     SWindowSettings windowSettings = {
         .ResolutionWidth = 1920,
         .ResolutionHeight = 1080,
@@ -1184,8 +943,8 @@ auto main() -> int32_t {
         return -1;
     }
 
-#if USE_LILLYPAD
-    if (!LoadLillypad()) {
+#if defined(TOADWART_ENABLE_LILYPAD)
+    if (!LoadLilypad()) {
         return -1;
     }
 
@@ -1261,7 +1020,9 @@ auto main() -> int32_t {
         glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
     }
 
+#if defined(TOADWART_ENABLE_PROFILER)
     TracyGpuContext;
+#endif
 
     int32_t iconWidth = 0;
     int32_t iconHeight = 0;
@@ -1378,6 +1139,21 @@ auto main() -> int32_t {
     auto simpleDebugProgramPipeline = CreateGraphicsProgramPipeline("SimpleDebugPipeline", simpleVertexShader, simpleDebugFragmentShader);
     g_fullscreenTrianglePipeline = CreateGraphicsProgramPipeline("FST", fullscreenTriangleVertexShader, fullscreenTriangleFragmentShader);
 
+    auto shadowVertexShaderResult = CreateProgram(GL_VERTEX_SHADER, "data/shaders/Shadow.vs.glsl", "Shadow.vs.glsl");
+    if (!shadowVertexShaderResult) {
+        spdlog::error(shadowVertexShaderResult.error());
+        return -7;
+    }
+    auto shadowVertexShader = *shadowVertexShaderResult;
+
+    auto shadowFragmentShaderResult = CreateProgram(GL_FRAGMENT_SHADER, "data/shaders/Shadow.fs.glsl", "Shadow.fs.glsl");
+    if (!shadowFragmentShaderResult) {
+        spdlog::error(shadowFragmentShaderResult.error());
+        return -7;
+    }
+    auto shadowFragmentShader = *shadowFragmentShaderResult;
+    auto shadowProgramPipeline = CreateGraphicsProgramPipeline("Shadow", shadowVertexShader, shadowFragmentShader);
+
     SGlobalUniforms globalUniforms = {
         .ProjectionMatrix = glm::infinitePerspectiveRH_ZO(glm::radians(60.0f), (float)g_framebufferSize.x / (float)g_framebufferSize.x, 0.1f),
         //.ProjectionMatrix = glm::perspectiveFovRH_ZO(glm::radians(60.0f), (float)g_framebufferSize.x, (float)g_framebufferSize.x, 0.1f, 1024.0f),
@@ -1397,12 +1173,17 @@ auto main() -> int32_t {
         return glm::translate(glm::mat4x4(1.0f), glm::vec3(x, y, z));
     };
 
-    SFramebufferAttachmentDescriptor attachmentFormats[] = { 
+    SFramebufferAttachmentDescriptor mainFramebufferAttachmentDescriptors[] = { 
         { EFormat::R8G8B8A8_Srgb, glm::vec4(0.1f, 0.1f, 0.1f, 1.0f) }, 
         { EFormat::R32G32B32A32_Float, std::nullopt }, 
         { EFormat::D32_Float, glm::vec4(1.0f, 0.0f, 0.0f, 0.0f)},
     };
-    auto mainFramebuffer = CreateFramebuffer("MainFramebuffer", g_framebufferSize.x, g_framebufferSize.y, attachmentFormats);
+    auto mainFramebuffer = CreateFramebuffer("MainFramebuffer", g_framebufferSize.x, g_framebufferSize.y, mainFramebufferAttachmentDescriptors);
+
+    SFramebufferAttachmentDescriptor shadowFramebufferAttachmentDescriptors[] = { 
+        { EFormat::D32_Float, glm::vec4(1.0f, 0.0f, 0.0f, 0.0f)},
+    };
+    auto shadowFramebuffer = CreateFramebuffer("ShadowFramebuffer", 1024, 1024,  shadowFramebufferAttachmentDescriptors);
 
     g_fullscreenSamplerNearestNearestClampToEdge = GetOrCreateSampler(SSamplerData{
         .Name = 0,
@@ -1627,8 +1408,8 @@ auto main() -> int32_t {
     auto accumulatedTimeInSeconds = 0.0;
     while (!glfwWindowShouldClose(g_window)) {
 
-        //ZoneScopedN("Render");
-        TracyGpuZone("Render");
+        TOADWART_PROFILE_NAMED_SCOPE("Render");
+        //TracyGpuZone("Render");
 
         auto currentTimeInSeconds = glfwGetTime();
         auto deltaTimeInSeconds = currentTimeInSeconds - previousTimeInSeconds;
@@ -1657,7 +1438,7 @@ auto main() -> int32_t {
 
         if (g_sceneViewerResized || g_framebufferResized) {
 
-            ZoneScopedN("Resize");
+            TOADWART_PROFILE_NAMED_SCOPE("Resize");
 
             if (g_isEditor) {
                 scaledFramebufferSize = glm::vec2(g_sceneViewerSize) * windowSettings.ResolutionScale;
@@ -1684,6 +1465,10 @@ auto main() -> int32_t {
         // Shadow Pass
 
         PushDebugGroup("ShadowPass");
+
+        glViewport(0, 0, shadowFramebuffer.Width, shadowFramebuffer.Height);
+        glBindProgramPipeline(shadowProgramPipeline);
+
         PopDebugGroup();
 
         // GBuffer Pass
@@ -1738,7 +1523,7 @@ auto main() -> int32_t {
 
         if (!g_isEditor) {
             ImGui::SetNextWindowPos({32, 32});
-#if USE_LILLYPAD            
+#if defined(TOADWART_ENABLE_LILYPAD)            
             ImGui::SetNextWindowSize({168, 192});
 #else
             ImGui::SetNextWindowSize({168, 136});
@@ -1757,7 +1542,7 @@ auto main() -> int32_t {
                 ImGui::Text("rfps: %.0f", framesPerSecond);
                 ImGui::Text("rpms: %.0f", framesPerSecond * 60.0f);
                 ImGui::Text("  ft: %.2f ms", deltaTimeInSeconds * 1000.0f);
-#if USE_LILLYPAD
+#if defined(TOADWART_ENABLE_LILYPAD)
                 ImGui::SeparatorText("GPU Statistics");
                 ImGui::Text("temp: %d °C", gpuInformation.GpuCoreTemperature);
                 ImGui::Text("  cs: %d (%d)/(%d) MHz", gpuInformation.ClockSpeedCurrent, gpuInformation.ClockSpeedMin, gpuInformation.ClockSpeedMax);
@@ -1980,21 +1765,21 @@ auto main() -> int32_t {
             PopDebugGroup();            
         }
         {
-            ZoneScopedN("SwapBuffers");
+            TOADWART_PROFILE_NAMED_SCOPE("SwapBuffers");
             glfwSwapBuffers(g_window);
         }
 
         glfwPollEvents();
 
         frameCounter++;
+#if defined(TOADWART_ENABLE_LILYPAD)        
         if ((frameCounter % 2000) == 0) {
-#if USE_LILLYPAD            
             UpdateGpuInformation(0, &gpuInformation);
-#endif
         }
+#endif        
 
-        TracyGpuCollect;
-        FrameMark;        
+        TOADWART_MARK_GPU_FRAME();
+        TOADWART_MARK_FRAME();
     }
 
     glDeleteSamplers(1, &g_fullscreenSamplerNearestNearestClampToEdge);
@@ -2013,17 +1798,25 @@ auto main() -> int32_t {
     DestroyFramebuffer(mainFramebuffer);
 
     glDeleteBuffers(1, &objectBuffer);
+    glDeleteBuffers(1, &megaMaterialBuffer);
+    glDeleteBuffers(1, &megaVertexBuffer);
+    glDeleteBuffers(1, &megaIndexBuffer);
+    glDeleteBuffers(1, &cpuMaterialBuffer);
+    glDeleteBuffers(1, &gpuMaterialBuffer);
 
     glDeleteVertexArrays(1, &g_defaultInputLayout);
 
     glDeleteProgram(simpleVertexShader);
     glDeleteProgram(simpleFragmentShader);
     glDeleteProgram(simpleDebugFragmentShader);
-    glDeleteProgram(fullscreenTriangleVertexShader);
-    glDeleteProgram(fullscreenTriangleFragmentShader);
     glDeleteProgramPipelines(1, &simpleDebugProgramPipeline);
     glDeleteProgramPipelines(1, &simpleProgramPipeline);
+    glDeleteProgram(fullscreenTriangleVertexShader);
+    glDeleteProgram(fullscreenTriangleFragmentShader);
     glDeleteProgramPipelines(1, &g_fullscreenTrianglePipeline);
+    glDeleteProgram(shadowVertexShader);
+    glDeleteProgram(shadowFragmentShader);
+    glDeleteProgramPipelines(1, &shadowProgramPipeline);
 
     if (g_implotContext != nullptr) {
         ImPlot::DestroyContext(g_implotContext);

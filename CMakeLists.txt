@@ -9,12 +9,14 @@ macro(set_option option help value)
     endif()
 endmacro()
 
-set_option(USE_LILLYPAD "Fetch GPU Temperature and clock speeds on nvidia on linux" OFF)
-
 project(Toadwart)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_WARN_DEPRECATED OFF CACHE BOOL "")
+
+set(TOADWART_ENABLE_LOGGER OFF CACHE BOOL "Enable logging")
+set(TOADWART_ENABLE_PROFILER ON CACHE BOOL "Enable CPU profiling")
+set(TOADWART_ENABLE_LILYPAD ON CACHE BOOL "Fetch GPU Temperature and clock speeds on nvidia on linux")
 
 include(cmake/PreCompiledHeaders.cmake)
 

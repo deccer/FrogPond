@@ -19,6 +19,6 @@ struct SGpuInformation {
     int64_t MemoryTransferRateSpeedMax;
 };
 
-auto LoadLillypad() -> bool;
-auto UnloadLillypad() -> void;
+auto LoadLilypad() -> bool;
+auto UnloadLilypad() -> void;
 auto UpdateGpuInformation(int32_t gpuIndex, SGpuInformation* gpuInformation) -> bool;

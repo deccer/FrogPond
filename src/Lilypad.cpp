@@ -4,13 +4,13 @@
 #include <NVCtrl/NVCtrlLib.h>
 
 #include <iostream>
-#include "Lillypad.hpp"
+#include "Lilypad.hpp"
 
 #include <map>
 
 static Display* g_x11Display = nullptr;
 
-auto LoadLillypad() -> bool {
+auto LoadLilypad() -> bool {
 
     g_x11Display = glfwGetX11Display();
     int32_t eventBase = 0;
@@ -23,7 +23,7 @@ auto LoadLillypad() -> bool {
     return true;
 }
 
-auto UnloadLillypad() -> void {
+auto UnloadLilypad() -> void {
     g_x11Display = nullptr;
 }
 
