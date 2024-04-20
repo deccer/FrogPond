@@ -36,5 +36,5 @@ void main()
     SGpuGlobalLight global_light = globalLights.Lights[u_global_light_index];
     gl_Position = global_light.ProjectionMatrix *
                   global_light.ViewMatrix *
-                  instanceBuffer.Instances[gl_DrawID].WorldMatrix * vec4(i_position, 1.0);
+                  Objects[gl_DrawID].WorldMatrix * vec4(i_position, 1.0);
 }
