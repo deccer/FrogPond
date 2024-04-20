@@ -84,7 +84,7 @@ struct SVertexPositionUv {
 
 struct SVertexPositionNormalUv {
     glm::vec3 Position;
-    glm::vec3 Normal;
+    uint32_t Normal;
     glm::vec2 Uv;
 };
 
@@ -521,6 +521,19 @@ auto GetLocalTransform(const fastgltf::Node& node) -> glm::mat4 {
     return transform;
 }
 
+auto SignNotZero(glm::vec2 v) -> glm::vec2 {
+
+    return glm::vec2((v.x >= 0.0f) ? +1.0f : -1.0f, (v.y >= 0.0f) ? +1.0f : -1.0f);
+}
+
+auto EncodeNormal(glm::vec3 normal) -> glm::vec2 {
+
+    glm::vec2 encodedNormal = glm::vec2{normal.x, normal.y} * (1.0f / (abs(normal.x) + abs(normal.y) + abs(normal.z)));
+    return (normal.z <= 0.0f)
+        ? ((1.0f - glm::abs(glm::vec2{encodedNormal.y, encodedNormal.x})) * SignNotZero(encodedNormal))
+        : encodedNormal;
+}
+
 auto GetVertices(
     const fastgltf::Asset& model, 
     const fastgltf::Primitive& primitive) -> std::vector<SVertexPositionNormalUv> {
@@ -562,7 +575,7 @@ auto GetVertices(
         vertices[i] = 
         {
             positions[i],
-            normals[i],
+            glm::packSnorm2x16(EncodeNormal(normals[i])),
             uvs[i]
         };
     }
@@ -1464,12 +1477,14 @@ auto main(
 
         // Shadow Pass
 
+        /*
         PushDebugGroup("ShadowPass");
 
         glViewport(0, 0, shadowFramebuffer.Width, shadowFramebuffer.Height);
         glBindProgramPipeline(shadowProgramPipeline);
 
         PopDebugGroup();
+        */
 
         // GBuffer Pass
 

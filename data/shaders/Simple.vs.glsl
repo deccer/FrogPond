@@ -13,10 +13,10 @@ layout (location = 0, std140) uniform CameraInformation
     //mat4 old_projection_matrix;
     //mat4 old_view_matrix;
     //mat4 old_view_projection_matrix;
-    mat4 projection_matrix;
-    mat4 view_matrix;
+    mat4 ProjectionMatrix;
+    mat4 ViewMatrix;
     //mat4 view_projection_matrix;
-    vec4 camera_position;
+    vec4 CameraPosition;
     //vec4 frustum_planes[6];
     //vec4 viewport;
 } u_camera_information;
@@ -74,9 +74,9 @@ SPackedVec4 Vec4ToPacked(in vec4 v)
 
 struct SVertexPositionNormalUv
 {
-    SPackedVec3 position;
-    SPackedVec3 normal;
-    SPackedVec2 uv;
+    SPackedVec3 Position;
+    uint Normal;
+    SPackedVec2 Uv;
 };
 
 layout(binding = 1, std430) restrict readonly buffer VertexBuffer
@@ -86,8 +86,8 @@ layout(binding = 1, std430) restrict readonly buffer VertexBuffer
 
 struct SObject
 {
-    mat4 world_matrix;
-    ivec4 instance_parameter;
+    mat4 WorldMatrix;
+    ivec4 InstanceParameter;
 };
 
 layout (binding = 2, std430) restrict readonly buffer ObjectsBuffer
@@ -95,17 +95,32 @@ layout (binding = 2, std430) restrict readonly buffer ObjectsBuffer
     SObject Objects[];
 };
 
+vec2 SignNotZero(vec2 v)
+{
+    return vec2((v.x >= 0.0) ? +1.0 : -1.0, (v.y >= 0.0) ? +1.0 : -1.0);
+}
+
+vec3 DecodeNormal(vec2 encodedNormal)
+{
+    vec3 decodedNormal = vec3(encodedNormal.xy, 1.0 - abs(encodedNormal.x) - abs(encodedNormal.y));
+    if (decodedNormal.z < 0) {
+        decodedNormal.xy = (1.0 - abs(decodedNormal.yx)) * SignNotZero(decodedNormal.xy);
+    }
+
+    return normalize(decodedNormal);
+}
+
 void main()
 {
     SVertexPositionNormalUv vertex = Vertices[gl_VertexID];
     SObject object = Objects[gl_DrawID];
 
-    v_normal = PackedToVec3(vertex.normal);
-    v_uv = PackedToVec2(vertex.uv);
-    v_material_id = object.instance_parameter.x;
+    v_normal = DecodeNormal(unpackSnorm2x16(vertex.Normal));
+    v_uv = PackedToVec2(vertex.Uv);
+    v_material_id = object.InstanceParameter.x;
 
-    gl_Position = u_camera_information.projection_matrix *
-                  u_camera_information.view_matrix *
-                  object.world_matrix * 
-                  vec4(PackedToVec3(vertex.position), 1.0);
+    gl_Position = u_camera_information.ProjectionMatrix *
+                  u_camera_information.ViewMatrix *
+                  object.WorldMatrix * 
+                  vec4(PackedToVec3(vertex.Position), 1.0);
 }
