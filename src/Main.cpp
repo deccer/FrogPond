@@ -77,6 +77,15 @@ struct SWindowSettings {
     bool IsDebug;
 };
 
+struct SVertexPosition {
+    glm::vec3 Position;
+};
+
+struct SVertexNormalUv {
+    uint32_t Normal;
+    glm::vec2 Uv;
+};
+
 struct SVertexPositionUv {
     glm::vec3 Position;
     glm::vec2 Uv;
@@ -252,7 +261,8 @@ float g_cameraSpeed = 4.0f;
 bool g_cursorIsActive = true;
 bool g_cursorJustEntered = false;
 
-uint32_t g_lastVertexOffset = 0;
+uint32_t g_lastVertexPositionOffset = 0;
+uint32_t g_lastVertexNormalUvOffset = 0;
 uint32_t g_lastIndexOffset = 0;
 
 SDebugOptions g_debugOptions = {};
@@ -536,7 +546,7 @@ auto EncodeNormal(glm::vec3 normal) -> glm::vec2 {
 
 auto GetVertices(
     const fastgltf::Asset& model, 
-    const fastgltf::Primitive& primitive) -> std::vector<SVertexPositionNormalUv> {
+    const fastgltf::Primitive& primitive) -> std::pair<std::vector<SVertexPosition>, std::vector<SVertexNormalUv>> {
 
     std::vector<glm::vec3> positions;
     auto& positionAccessor = model.accessors[primitive.findAttribute("POSITION")->second];
@@ -567,20 +577,22 @@ auto GetVertices(
         uvs.resize(positions.size(), {});
     }
 
-    std::vector<SVertexPositionNormalUv> vertices;
-    vertices.resize(positions.size());
+    std::vector<SVertexPosition> verticesPosition;
+    std::vector<SVertexNormalUv> verticesNormalUv;
+    verticesPosition.resize(positions.size());
+    verticesNormalUv.resize(positions.size());
 
-    for (size_t i = 0; i < positions.size(); i++)
-    {
-        vertices[i] = 
-        {
+    for (size_t i = 0; i < positions.size(); i++) {
+        verticesPosition[i] = {
             positions[i],
+        };        
+        verticesNormalUv[i] = {
             glm::packSnorm2x16(EncodeNormal(normals[i])),
             uvs[i]
         };
     }
 
-    return vertices;
+    return {verticesPosition, verticesNormalUv};
 }
 
 auto GetIndices(
@@ -637,28 +649,32 @@ auto GetPooledMaterial(
 }
 
 auto GetPooledPrimitive(
-    uint32_t megaVertexBuffer,
+    uint32_t megaVertexBufferPosition,
+    uint32_t megaVertexBufferNormalUv,
     uint32_t megaIndexBuffer,
     const fastgltf::Asset& fgAsset,
     const fastgltf::Primitive& fgPrimitive) -> SCpuPooledPrimitive {
 
-    auto vertices = GetVertices(fgAsset, fgPrimitive);
+    const auto& [verticesPosition, verticesNormalUv] = GetVertices(fgAsset, fgPrimitive);
     auto indices = GetIndices(fgAsset, fgPrimitive);
 
     SCpuPooledPrimitive pooledPrimitive = {
-        .VertexCount = vertices.size(),
-        .VertexOffset = g_lastVertexOffset,
+        .VertexCount = verticesPosition.size(),
+        .VertexOffset = g_lastVertexPositionOffset,
         .IndexCount = indices.size(),
         .IndexOffset = g_lastIndexOffset,
     };
 
-    auto verticesSizeInBytes = sizeof(SVertexPositionNormalUv) * vertices.size();
+    auto verticesPositionSizeInBytes = sizeof(SVertexPosition) * verticesPosition.size();
+    auto verticesNormalUvSizeInBytes = sizeof(SVertexNormalUv) * verticesNormalUv.size();
     auto indicesSizeInBytes = sizeof(uint32_t) * indices.size();
 
-    glNamedBufferSubData(megaVertexBuffer, g_lastVertexOffset * sizeof(SVertexPositionNormalUv), verticesSizeInBytes, vertices.data());
+    glNamedBufferSubData(megaVertexBufferPosition, g_lastVertexPositionOffset * sizeof(SVertexPosition), verticesPositionSizeInBytes, verticesPosition.data());
+    glNamedBufferSubData(megaVertexBufferNormalUv, g_lastVertexNormalUvOffset * sizeof(SVertexNormalUv), verticesNormalUvSizeInBytes, verticesNormalUv.data());
     glNamedBufferSubData(megaIndexBuffer, g_lastIndexOffset * sizeof(uint32_t), indicesSizeInBytes, indices.data());
 
-    g_lastVertexOffset += vertices.size();
+    g_lastVertexPositionOffset += verticesPosition.size();
+    g_lastVertexNormalUvOffset += verticesNormalUv.size();
     g_lastIndexOffset += indices.size();
 
     return std::move(pooledPrimitive);
@@ -675,7 +691,8 @@ inline auto PolarToCartesian(float elevation, float azimuth) -> glm::vec3 {
 auto AddModelFromFile(
     const std::string& modelName,
     std::filesystem::path filePath,
-    const uint32_t megaVertexBuffer,
+    const uint32_t megaVertexBufferPosition,
+    const uint32_t megaVertexBufferNormalUv,
     const uint32_t megaIndexBuffer,
     const uint32_t megaMaterialBuffer) -> void {
 
@@ -909,7 +926,8 @@ auto AddModelFromFile(
                 : 0;
 
             auto pooledPrimitive = GetPooledPrimitive(
-                megaVertexBuffer,
+                megaVertexBufferPosition,
+                megaVertexBufferNormalUv,
                 megaIndexBuffer,
                 fgAsset,
                 fgPrimitive);
@@ -1209,9 +1227,13 @@ auto main(
     SetDebugLabel(g_defaultInputLayout, GL_VERTEX_ARRAY, "InputLayout_Empty");
     glBindVertexArray(g_defaultInputLayout);
 
-    uint32_t megaVertexBuffer = 0;
-    glCreateBuffers(1, &megaVertexBuffer);
-    glNamedBufferStorage(megaVertexBuffer, 1000000000, nullptr, GL_DYNAMIC_STORAGE_BIT);
+    uint32_t megaVertexBufferPosition = 0;
+    glCreateBuffers(1, &megaVertexBufferPosition);
+    glNamedBufferStorage(megaVertexBufferPosition, sizeof(SVertexPosition) * 1048576, nullptr, GL_DYNAMIC_STORAGE_BIT);
+
+    uint32_t megaVertexBufferNormalUv = 0;
+    glCreateBuffers(1, &megaVertexBufferNormalUv);
+    glNamedBufferStorage(megaVertexBufferNormalUv, sizeof(SVertexNormalUv) * 1048576, nullptr, GL_DYNAMIC_STORAGE_BIT);
 
     uint32_t megaIndexBuffer = 0;
     glCreateBuffers(1, &megaIndexBuffer);
@@ -1308,7 +1330,8 @@ auto main(
     AddModelFromFile(
         "SM_Model",
         "data/default/SM_Deccer_Cubes_Textured.gltf",
-        megaVertexBuffer,
+        megaVertexBufferPosition,
+        megaVertexBufferNormalUv,
         megaIndexBuffer,
         megaMaterialBuffer);
 
@@ -1508,10 +1531,11 @@ auto main(
         glVertexArrayElementBuffer(g_defaultInputLayout, megaIndexBuffer);
 
         glBindBufferBase(GL_UNIFORM_BUFFER, 0, globalUniformsBuffer);
-        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, megaVertexBuffer);
-        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, objectBuffer);
-        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, gpuMaterialBuffer);
-        glBindBufferBase(GL_UNIFORM_BUFFER, 4, shadingUniformsBuffer);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, megaVertexBufferPosition);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, megaVertexBufferNormalUv);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, objectBuffer);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, gpuMaterialBuffer);
+        glBindBufferBase(GL_UNIFORM_BUFFER, 5, shadingUniformsBuffer);
 
         if (g_debugShowMaterialId) {
             //glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 19, cpuMaterialBuffer);
@@ -1814,7 +1838,8 @@ auto main(
 
     glDeleteBuffers(1, &objectBuffer);
     glDeleteBuffers(1, &megaMaterialBuffer);
-    glDeleteBuffers(1, &megaVertexBuffer);
+    glDeleteBuffers(1, &megaVertexBufferPosition);
+    glDeleteBuffers(1, &megaVertexBufferNormalUv);
     glDeleteBuffers(1, &megaIndexBuffer);
     glDeleteBuffers(1, &cpuMaterialBuffer);
     glDeleteBuffers(1, &gpuMaterialBuffer);

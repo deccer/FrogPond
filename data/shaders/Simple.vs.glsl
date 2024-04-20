@@ -72,16 +72,25 @@ SPackedVec4 Vec4ToPacked(in vec4 v)
     return SPackedVec4(v.x, v.y, v.z, v.w);
 }
 
-struct SVertexPositionNormalUv
+struct SVertexPosition
 {
     SPackedVec3 Position;
+};
+
+struct SVertexNormalUv
+{
     uint Normal;
     SPackedVec2 Uv;
 };
 
-layout(binding = 1, std430) restrict readonly buffer VertexBuffer
+layout(binding = 1, std430) restrict readonly buffer VertexPositionBuffer
 {
-    SVertexPositionNormalUv Vertices[];
+    SVertexPosition VertexPositions[];
+};
+
+layout(binding = 2, std430) restrict readonly buffer VertexNormalUvBuffer
+{
+    SVertexNormalUv VertexNormalUvs[];
 };
 
 struct SObject
@@ -90,7 +99,7 @@ struct SObject
     ivec4 InstanceParameter;
 };
 
-layout (binding = 2, std430) restrict readonly buffer ObjectsBuffer
+layout (binding = 3, std430) restrict readonly buffer ObjectsBuffer
 {
     SObject Objects[];
 };
@@ -112,15 +121,16 @@ vec3 DecodeNormal(vec2 encodedNormal)
 
 void main()
 {
-    SVertexPositionNormalUv vertex = Vertices[gl_VertexID];
+    SVertexPosition vertex_position = VertexPositions[gl_VertexID];
+    SVertexNormalUv vertex_normal_uv = VertexNormalUvs[gl_VertexID];
     SObject object = Objects[gl_DrawID];
 
-    v_normal = DecodeNormal(unpackSnorm2x16(vertex.Normal));
-    v_uv = PackedToVec2(vertex.Uv);
+    v_normal = DecodeNormal(unpackSnorm2x16(vertex_normal_uv.Normal));
+    v_uv = PackedToVec2(vertex_normal_uv.Uv);
     v_material_id = object.InstanceParameter.x;
 
     gl_Position = u_camera_information.ProjectionMatrix *
                   u_camera_information.ViewMatrix *
                   object.WorldMatrix * 
-                  vec4(PackedToVec3(vertex.Position), 1.0);
+                  vec4(PackedToVec3(vertex_position.Position), 1.0);
 }

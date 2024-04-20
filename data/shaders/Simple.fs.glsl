@@ -24,12 +24,12 @@ struct SGpuMaterial
     uint64_t _padding1;
 };
 
-layout (binding = 3, std430) readonly buffer GpuMaterialBuffer
+layout (binding = 4, std430) readonly buffer GpuMaterialBuffer
 {
     SGpuMaterial GpuMaterials[];
 };
 
-layout (binding = 4, std140) uniform ShadingBuffer
+layout (binding = 5, std140) uniform ShadingBuffer
 {
     vec4 SunDirection;
     vec4 SunStrength;
