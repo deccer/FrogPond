@@ -40,7 +40,7 @@ endif()
 
 if (TOADWART_ENABLE_LILYPAD)
     set(TOADWART_CONFIGURATION_COMPILE_DEFINITIONS ${TOADWART_CONFIGURATION_COMPILE_DEFINITIONS} "TOADWART_ENABLE_LILYPAD")
-    target_link_libraries(Toadwart PRIVATE Lillypad)    
+    target_link_libraries(Toadwart PRIVATE Lilypad)    
 endif()
 
 if (WIN32)
